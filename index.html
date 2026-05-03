@@ -214,16 +214,6 @@ const seedProviders = [
     ],
   },
   {
-    id: "p4", name: "Omar", specialty: "Music Teacher",
-    cat: "music", rating: 4.7, reviews: 41, priceFrom: 140,
-    city: "Doha", distance: 7.4, verified: false,
-    bio: "Oud, piano, and music theory for all ages. Studio in Msheireb.",
-    cover: "muted-plum",
-    services: [
-      { id: "s8", title: "Oud Lesson — 1hr", duration: 60, price: 140, locType: "provider_location" },
-    ],
-  },
-  {
     id: "p5", name: "Maya", specialty: "Beauty Specialist",
     cat: "beauty", rating: 4.9, reviews: 203, priceFrom: 200,
     city: "Doha", distance: 2.4, verified: true,
@@ -303,7 +293,6 @@ const categories = [
   { id: "fitness", label: "Fitness", icon: Dumbbell },
   { id: "wellness", label: "Wellness", icon: HeartIcon },
   { id: "languages", label: "Languages", icon: Languages },
-  { id: "music", label: "Music", icon: Music },
   { id: "beauty", label: "Beauty", icon: Scissors },
   { id: "tutoring", label: "Tutoring", icon: BookOpen },
 ];
@@ -327,7 +316,7 @@ const seedAvailability = {
   p2: { hours: { 0: ["06:00","07:00","08:00","17:00","18:00","19:00","20:00"], 1: ["06:00","07:00","08:00","17:00","18:00","19:00","20:00"], 2: ["06:00","07:00","08:00","17:00","18:00","19:00","20:00"], 3: ["06:00","07:00","08:00","17:00","18:00","19:00","20:00"], 4: ["06:00","07:00","08:00","17:00","18:00","19:00","20:00"], 5: ["06:00","07:00","08:00"], 6: ["08:00","09:00","17:00","18:00","19:00"] }, blackouts: [] },
   // Aisha — Tutor. Afternoons + evenings.
   p3: { hours: { 0: ["14:00","15:00","16:00","17:00","18:00"], 1: ["14:00","15:00","16:00","17:00","18:00"], 2: ["14:00","15:00","16:00","17:00","18:00"], 3: ["14:00","15:00","16:00","17:00","18:00"], 4: [], 5: [], 6: ["10:00","11:00","12:00","14:00","15:00"] }, blackouts: [] },
-  p4: { hours: { 0: ["16:00","17:00","18:00"], 1: ["16:00","17:00","18:00"], 2: ["16:00","17:00","18:00"], 3: ["16:00","17:00","18:00"], 4: [], 5: [], 6: ["10:00","11:00","14:00","16:00","18:00"] }, blackouts: [] },
+  p4: { hours: { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] }, blackouts: [] },
   // Maya — Beauty.
   p5: { hours: { 0: ["10:00","12:00","14:00","16:00"], 1: ["10:00","12:00","14:00","16:00"], 2: ["10:00","12:00","14:00","16:00"], 3: ["10:00","12:00","14:00","16:00"], 4: ["10:00","12:00"], 5: [], 6: ["10:00","12:00","14:00","16:00","18:00"] }, blackouts: [] },
   p6: { hours: { 0: ["15:00","16:00","17:00","18:00","19:00"], 1: ["15:00","16:00","17:00","18:00","19:00"], 2: ["15:00","16:00","17:00","18:00","19:00"], 3: ["15:00","16:00","17:00","18:00","19:00"], 4: [], 5: [], 6: ["10:00","12:00","14:00","16:00"] }, blackouts: [] },
@@ -1842,11 +1831,13 @@ const ProviderDetailScreen = ({ provider, onBack, onBook, onMessage }) => {
           ))}
         </div>
 
-        <div className="mt-4 pb-32">
+        <div className="mt-4 pb-6">
           {tab === "services" && (
             <div className="flex flex-col gap-3">
               {provider.services.map(s => (
-                <div key={s.id} className="rounded-xl p-4" style={{ background: tokens.bgSurface, border: `1px solid ${tokens.border}` }}>
+                <button key={s.id} onClick={() => onBook(s.id)}
+                  className="text-left rounded-xl p-4 transition-all active:scale-[0.99] hover:bg-black/[0.02]"
+                  style={{ background: tokens.bgSurface, border: `1px solid ${tokens.border}` }}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1">
                       <div className="text-sm font-semibold" style={{ color: tokens.ink900 }}>{s.title}</div>
@@ -1861,7 +1852,14 @@ const ProviderDetailScreen = ({ provider, onBack, onBook, onMessage }) => {
                       <div className="text-lg font-semibold font-mono" style={{ color: tokens.ink900 }}>{s.price}</div>
                     </div>
                   </div>
-                </div>
+                  <div className="mt-3 flex items-center justify-between">
+                    <span className="text-[11px]" style={{ color: tokens.ink500 }}>Tap to book this service</span>
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full"
+                      style={{ background: tokens.primary100, color: tokens.primary }}>
+                      Book <ArrowRight size={11} />
+                    </span>
+                  </div>
+                </button>
               ))}
             </div>
           )}
@@ -1903,8 +1901,9 @@ const ProviderDetailScreen = ({ provider, onBack, onBook, onMessage }) => {
         </div>
       </div>
 
-      {/* Sticky Book button */}
-      <div className="fixed bottom-0 left-0 right-0 px-5 py-4 flex gap-2" style={{ background: `linear-gradient(to top, ${tokens.bgBase} 60%, transparent)` }}>
+      {/* Sticky Book button — sticks inside the phone frame */}
+      <div className="sticky bottom-0 px-5 py-4 flex gap-2"
+        style={{ background: `linear-gradient(to top, ${tokens.bgBase} 70%, ${tokens.bgBase}DD)`, borderTop: `1px solid ${tokens.border}` }}>
         <Btn variant="outline" size="lg" onClick={() => onMessage && onMessage(provider)} className="flex-shrink-0" leadingIcon={MessageSquare} />
         <Btn size="lg" onClick={onBook} trailingIcon={ArrowRight} className="flex-1">
           Book {provider.name} · from QAR {provider.priceFrom}
@@ -2038,7 +2037,7 @@ const BookingFlow = ({ provider, initialServiceId, onBack, onComplete }) => {
         </div>
       </div>
 
-      <div className="flex-1 px-5 pb-32">
+      <div className="flex-1 px-5 pb-6">
         {step === 0 && (
           <>
             <h2 className="text-xl font-medium" style={{ fontFamily: "Fraunces, serif", color: tokens.ink900 }}>What service?</h2>
@@ -2141,7 +2140,7 @@ const BookingFlow = ({ provider, initialServiceId, onBack, onComplete }) => {
             <div className="mt-4 flex flex-col gap-2">
               {[
                 { id: "client_home", icon: Home, label: "At my home", sub: "Sara's apartment · The Pearl" },
-                { id: "provider_location", icon: MapPin, label: `At ${provider.name}'s location`, sub: provider.specialty === "Music Teacher" ? "Studio in Msheireb" : "West Bay studio" },
+                { id: "provider_location", icon: MapPin, label: `At ${provider.name}'s location`, sub: "West Bay studio" },
                 { id: "online", icon: MessageSquare, label: "Online", sub: "Video call · link sent 15 min before", recommended: provider.cat === "languages" || provider.cat === "tutoring" || provider.cat === "wellness" },
                 { id: "custom_address", icon: MapPin, label: "Custom address", sub: "Add a one-off location" },
               ].map(o => {
@@ -2261,8 +2260,18 @@ const BookingFlow = ({ provider, initialServiceId, onBack, onComplete }) => {
 
               <div className="pt-4 flex flex-col gap-2">
                 <Row label={isCustom ? "Your offer" : "Service"} value={`QAR ${service.price}`} mono />
-                <Row label="Service fee" value="QAR 12" mono />
-                <Row label="Total" value={`QAR ${service.price + 12}`} mono bold />
+                {locType === "online" ? (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs uppercase tracking-wider" style={{ color: tokens.ink500 }}>Service fee</span>
+                    <span className="text-sm font-mono font-medium flex items-center gap-1.5">
+                      <span className="line-through" style={{ color: tokens.ink500 }}>QAR 12</span>
+                      <Pill bg={tokens.success + "22"} color={tokens.success} className="text-[9px] px-1.5 py-0">Waived · Online</Pill>
+                    </span>
+                  </div>
+                ) : (
+                  <Row label="Service fee" value="QAR 12" mono />
+                )}
+                <Row label="Total" value={`QAR ${service.price + (locType === "online" ? 0 : 12)}`} mono bold />
                 {isCustom && (
                   <div className="mt-2 rounded-md p-2.5 flex items-start gap-2"
                     style={{ background: tokens.accent100 + "55" }}>
@@ -2290,7 +2299,7 @@ const BookingFlow = ({ provider, initialServiceId, onBack, onComplete }) => {
         )}
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 px-5 py-4 border-t" style={{ background: tokens.bgBase, borderColor: tokens.border }}>
+      <div className="sticky bottom-0 px-5 py-4 border-t" style={{ background: tokens.bgBase, borderColor: tokens.border }}>
         <Btn size="lg" onClick={next} disabled={!canContinue} className="w-full" trailingIcon={step === 3 ? Check : ArrowRight}>
           {step === 3 ? "Request booking" : "Continue"}
         </Btn>
@@ -2343,7 +2352,7 @@ const CollabBookScreen = ({ post, providers, onBack, onComplete }) => {
     <div className="min-h-full flex flex-col" style={{ background: tokens.bgBase }}>
       <TopBar onBack={onBack} title="Book bundle" />
 
-      <div className="flex-1 px-5 pb-32">
+      <div className="flex-1 px-5 pb-6">
         {/* Collab header */}
         <div className="rounded-2xl p-5 relative overflow-hidden"
           style={{ background: `linear-gradient(135deg, ${tokens.primary100}, ${tokens.accent100})`, border: `1px solid ${tokens.border}` }}>
@@ -2464,7 +2473,7 @@ const CollabBookScreen = ({ post, providers, onBack, onComplete }) => {
         </div>
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 px-5 py-4 border-t" style={{ background: tokens.bgBase, borderColor: tokens.border }}>
+      <div className="sticky bottom-0 px-5 py-4 border-t" style={{ background: tokens.bgBase, borderColor: tokens.border }}>
         <Btn size="lg" className="w-full" trailingIcon={ArrowRight} disabled={!canBook}
           onClick={() => onComplete({ post, date: selectedDate, slotA, slotB, provider, partner })}>
           Request bundle · QAR {c.bundlePrice}
@@ -2506,7 +2515,7 @@ const BookingDetailScreen = ({ booking, providers, onBack, onPay, onCancel, onRe
     <div className="min-h-full flex flex-col" style={{ background: tokens.bgBase }}>
       <TopBar onBack={onBack} title="Booking details" />
 
-      <div className="flex-1 px-5 pb-32">
+      <div className="flex-1 px-5 pb-6">
         {/* Provider header */}
         <div className="rounded-2xl p-5" style={{ background: tokens.bgSurface, border: `1px solid ${tokens.border}` }}>
           <div className="flex items-center gap-3">
@@ -2650,7 +2659,7 @@ const RescheduleFlow = ({ booking, providers, onBack, onComplete }) => {
     <div className="min-h-full flex flex-col" style={{ background: tokens.bgBase }}>
       <TopBar onBack={onBack} title="Reschedule" />
 
-      <div className="flex-1 px-5 pb-32">
+      <div className="flex-1 px-5 pb-6">
         <div className="rounded-xl p-3 flex items-center gap-2" style={{ background: tokens.bgMuted }}>
           <Clock size={14} style={{ color: tokens.ink500 }} />
           <span className="text-xs" style={{ color: tokens.ink700 }}>
@@ -2696,7 +2705,7 @@ const RescheduleFlow = ({ booking, providers, onBack, onComplete }) => {
         )}
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 px-5 py-4 border-t" style={{ background: tokens.bgBase, borderColor: tokens.border }}>
+      <div className="sticky bottom-0 px-5 py-4 border-t" style={{ background: tokens.bgBase, borderColor: tokens.border }}>
         <Btn size="lg" className="w-full" disabled={!canConfirm}
           onClick={() => onComplete(booking.id, selectedDate, slot)}>
           Confirm new time
@@ -4513,10 +4522,6 @@ const AdminScreen = ({ onSwitch }) => {
       residency: "Resident (sponsored)", crNumber: null, sponsorLetter: "Pending verification", taxConsent: true,
       flags: ["Sponsor NOC not yet uploaded — required for resident providers"],
       docs: ["Qatar ID", "Engineering degree", "Bio"] },
-    { id: "a4", name: "Omar", spec: "Music Teacher", time: "2d ago",
-      residency: "Resident (self-sponsored)", crNumber: "CR-291108", sponsorLetter: null, taxConsent: false,
-      flags: ["Tax disclosure consent missing", "Verification photos didn't match ID"],
-      docs: ["Qatar ID", "CR Certificate"] },
   ]);
 
   const approveApp = (a) => {
@@ -4537,7 +4542,6 @@ const AdminScreen = ({ onSwitch }) => {
     { id: "k2", name: "Khalid", spec: "Fitness Coach", residency: "Resident (self-sponsored)", crStatus: "Active", insuranceStatus: "Personal trainer cover · QGIRCO", lastReview: "Mar 2026", risk: "low" },
     { id: "k3", name: "Aisha", spec: "Arabic Tutor", residency: "Resident (sponsored)", crStatus: "Sponsor NOC valid until Dec 2026", insuranceStatus: "—", lastReview: "Feb 2026", risk: "medium" },
     { id: "k4", name: "Maya", spec: "Beauty Specialist", residency: "Resident (self-sponsored)", crStatus: "Active", insuranceStatus: "Renewal due", lastReview: "Nov 2025", risk: "medium" },
-    { id: "k5", name: "Omar", spec: "Music Teacher", residency: "Resident (self-sponsored)", crStatus: "CR renewal overdue", insuranceStatus: "—", lastReview: "Aug 2025", risk: "high" },
   ];
 
   const riskColor = { low: tokens.success, medium: tokens.accent600, high: tokens.danger };
@@ -4807,7 +4811,7 @@ function App() {
       slot: data.slot,
       when: `${fmtDateShort(data.date)} · ${data.slot}`,
       locType: data.locType,
-      total: data.service.price + 12,
+      total: data.service.price + (data.locType === "online" ? 0 : 12),
       status: "pending",
     };
     setBookings([newBooking, ...bookings]);
@@ -4961,7 +4965,7 @@ function App() {
         screen = <ExploreScreen providers={providers} onProvider={(id) => goto("provider", { providerId: id })} />;
         break;
       case "provider":
-        screen = <ProviderDetailScreen provider={provider} onBack={() => goto(tab)} onBook={() => goto("booking", { providerId: route.providerId })} onMessage={handleProviderInquiry} />;
+        screen = <ProviderDetailScreen provider={provider} onBack={() => goto(tab)} onBook={(sid) => goto("booking", { providerId: route.providerId, serviceId: sid })} onMessage={handleProviderInquiry} />;
         break;
       case "booking":
         screen = <BookingFlow provider={provider} initialServiceId={route.serviceId} onBack={() => goto("provider", { providerId: route.providerId })} onComplete={handleBook} />;
