@@ -2009,6 +2009,9 @@ function App() {
     setProviders(p => p.map(x => x.id === updated.id ? updated : x));
   };
 
+  // Route resolution (must be before any early return — rules of hooks)
+  const provider = useMemo(() => providers.find(p => p.id === currentRoute.providerId), [currentRoute.providerId, providers]);
+
   // Loading
   if (authLoading || loading) {
     return (
@@ -2021,9 +2024,6 @@ function App() {
       </div>
     );
   }
-
-  // Route resolution
-  const provider = useMemo(() => providers.find(p => p.id === currentRoute.providerId), [currentRoute.providerId, providers]);
 
   let page;
   const routeName = currentRoute.name;
