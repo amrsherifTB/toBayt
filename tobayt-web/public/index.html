@@ -1,0 +1,2088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>toBayt — Local Experts, Doha</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; font-family: Inter, system-ui, sans-serif; background: #FAF7F2; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #E5E1D8; border-radius: 99px; }
+  input, textarea, button, select { font-family: inherit; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-in { animation: fadeIn 0.25s ease-out; }
+  .slide-up { animation: slideUp 0.3s ease-out; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useEffect, useRef, useCallback } = React;
+
+// ============================================================
+// LUCIDE ICON SHIM
+// ============================================================
+function getLucideIcon(name) {
+  if (!window.lucide) return null;
+  const pascal = name.split('-').map(w => w[0].toUpperCase() + w.slice(1)).join('');
+  return (window.lucide.icons && (window.lucide.icons[pascal] || window.lucide.icons[name]))
+    || window.lucide[pascal] || null;
+}
+function makeIcon(name) {
+  return function Icon({ size = 20, color = 'currentColor', fill = 'none', strokeWidth = 2, className = '', style = {}, ...rest }) {
+    const data = getLucideIcon(name);
+    if (!data) return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} className={className} style={style} {...rest} />;
+    let children = Array.isArray(data) && Array.isArray(data[0]) ? data
+      : Array.isArray(data) && data.length === 3 && Array.isArray(data[2]) ? data[2] : [];
+    return (
+      <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+        fill={fill} stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round"
+        className={className} style={style} {...rest}>
+        {children.map(([tag, attrs], i) => React.createElement(tag, { key: i, ...attrs }))}
+      </svg>
+    );
+  };
+}
+const ArrowLeft = makeIcon('arrow-left');
+const ArrowRight = makeIcon('arrow-right');
+const Bell = makeIcon('bell');
+const Search = makeIcon('search');
+const Heart = makeIcon('heart');
+const MessageSquare = makeIcon('message-square');
+const Home = makeIcon('home');
+const Compass = makeIcon('compass');
+const CalendarIcon = makeIcon('calendar');
+const User = makeIcon('user');
+const Star = makeIcon('star');
+const MapPin = makeIcon('map-pin');
+const Clock = makeIcon('clock');
+const ChevronRight = makeIcon('chevron-right');
+const ChevronDown = makeIcon('chevron-down');
+const Check = makeIcon('check');
+const X = makeIcon('x');
+const Plus = makeIcon('plus');
+const Wallet = makeIcon('wallet');
+const ShieldCheck = makeIcon('shield-check');
+const Briefcase = makeIcon('briefcase');
+const LayoutDashboard = makeIcon('layout-dashboard');
+const Users = makeIcon('users');
+const FileText = makeIcon('file-text');
+const CreditCard = makeIcon('credit-card');
+const LogOut = makeIcon('log-out');
+const LogIn = makeIcon('log-in');
+const UserPlus = makeIcon('user-plus');
+const Sparkles = makeIcon('sparkles');
+const Phone = makeIcon('phone');
+const Zap = makeIcon('zap');
+const TrendingUp = makeIcon('trending-up');
+const AlertCircle = makeIcon('alert-circle');
+const Menu = makeIcon('menu');
+const Camera = makeIcon('camera');
+const Send = makeIcon('send');
+const Lock = makeIcon('lock');
+const Mail = makeIcon('mail');
+
+// ============================================================
+// DESIGN TOKENS
+// ============================================================
+const T = {
+  primary: '#1E40AF', primary600: '#1A3796', primary100: '#E0E7FF',
+  accent: '#E8A87C', accent600: '#D4936A', accent100: '#FBEEE4',
+  success: '#3A9D5D', warning: '#E8B43A', danger: '#C9485B',
+  bgBase: '#FAF7F2', bgSurface: '#FFFFFF', bgMuted: '#F1EDE6',
+  ink900: '#1A1F2C', ink700: '#3F4756', ink500: '#6B7280', ink300: '#B8BDC7',
+  border: '#E5E1D8',
+};
+
+// ============================================================
+// AVAILABILITY
+// ============================================================
+const TODAY = new Date();
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const DAY_INITIALS = ['S','M','T','W','T','F','S'];
+const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+const seedAvailability = {
+  default: { hours: { 0:['10:00','12:00','14:00','16:00','18:00'],1:['10:00','12:00','14:00','16:00','18:00'],2:['10:00','12:00','14:00','16:00','18:00'],3:['10:00','12:00','14:00','16:00','18:00'],4:['10:00','12:00','14:00','16:00','18:00'],5:['10:00','12:00','14:00'],6:['10:00','12:00','14:00','16:00','18:00','20:00'] }, blackouts:[] },
+};
+const fmtDateKey = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const fmtDateShort = d => `${DAY_NAMES[d.getDay()].slice(0,3)} ${MONTH_NAMES[d.getMonth()].slice(0,3)} ${d.getDate()}`;
+const fmtDateLong = d => `${DAY_NAMES[d.getDay()]}, ${MONTH_NAMES[d.getMonth()]} ${d.getDate()}`;
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate()+n); return x; };
+const isSameDate = (a, b) => a && b && a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+function getAvailableSlots(providerId, date) {
+  const av = seedAvailability[providerId] || seedAvailability.default;
+  const key = fmtDateKey(date);
+  if (av.blackouts.includes(key)) return [];
+  const hours = av.hours[date.getDay()] || [];
+  const isToday = isSameDate(date, TODAY);
+  const nowHHMM = `${String(TODAY.getHours()).padStart(2,'0')}:${String(TODAY.getMinutes()).padStart(2,'0')}`;
+  return hours.filter(h => !isToday || h > nowHHMM);
+}
+function hasAnyAvailability(providerId, date) { return getAvailableSlots(providerId, date).length > 0; }
+
+// ============================================================
+// STATUS
+// ============================================================
+const STATUS_LABELS = { pending:'Pending approval', approved:'Approved · Pay now', confirmed:'Confirmed', completed:'Completed', rejected:'Rejected', cancelled:'Cancelled' };
+const STATUS_COLORS = {
+  pending:   { bg: T.accent100, fg: T.accent600 },
+  approved:  { bg: '#FFF4D6',   fg: '#9C7A18' },
+  confirmed: { bg: T.primary100, fg: T.primary },
+  completed: { bg: '#E0F2E7',   fg: '#286B3D' },
+  rejected:  { bg: '#FBE2E6',   fg: '#8B2A38' },
+  cancelled: { bg: T.bgMuted,   fg: T.ink500 },
+};
+
+// ============================================================
+// AUTH STORAGE
+// ============================================================
+const TOKEN_KEY = 'tobayt_token';
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+const setToken = (t) => localStorage.setItem(TOKEN_KEY, t);
+const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+const authHeaders = () => {
+  const t = getToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+};
+const apiFetch = async (url, opts = {}) => {
+  const headers = { 'Content-Type':'application/json', ...authHeaders(), ...(opts.headers || {}) };
+  const res = await fetch(url, { ...opts, headers });
+  return res;
+};
+
+// ============================================================
+// TOAST
+// ============================================================
+const _toastListeners = new Set();
+const showToast = (text, kind = 'info') => _toastListeners.forEach(fn => fn({ id: Date.now() + Math.random(), text, kind }));
+const ToastHost = () => {
+  const [toasts, setToasts] = useState([]);
+  useEffect(() => {
+    const on = toast => {
+      setToasts(p => [...p, toast]);
+      setTimeout(() => setToasts(p => p.filter(t => t.id !== toast.id)), 2800);
+    };
+    _toastListeners.add(on);
+    return () => _toastListeners.delete(on);
+  }, []);
+  if (!toasts.length) return null;
+  return (
+    <div className="fixed top-20 right-6 z-[100] flex flex-col gap-2 pointer-events-none" style={{ minWidth: 280, maxWidth: 360 }}>
+      {toasts.map(t => {
+        const p = t.kind === 'success' ? { bg: T.success, fg: '#fff' } : t.kind === 'error' ? { bg: T.danger, fg: '#fff' } : { bg: T.ink900, fg: '#fff' };
+        return (
+          <div key={t.id} className="rounded-xl px-4 py-3 text-sm font-medium flex items-center gap-2 shadow-lg" style={{ background: p.bg, color: p.fg, animation: 'toastIn 0.2s ease-out' }}>
+            {t.kind === 'success' && <Check size={14} />}
+            {t.kind === 'error' && <AlertCircle size={14} />}
+            <span>{t.text}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+// ============================================================
+// VISUAL HELPERS
+// ============================================================
+const CoverArt = ({ tone = 'warm-orange', className = '', children, style = {} }) => {
+  const palettes = {
+    'warm-orange': { a: '#E8A87C', b: '#C97D52', c: '#F4D5BC' },
+    'deep-teal':   { a: '#1E40AF', b: '#3B5BCC', c: '#7C93E8' },
+    'soft-saffron':{ a: '#E8B43A', b: '#C9952A', c: '#F4D685' },
+    'muted-plum':  { a: '#6B4A6E', b: '#8B6790', c: '#B89BBC' },
+    'blush':       { a: '#D49AA0', b: '#B47780', c: '#EBC8CD' },
+  };
+  const p = palettes[tone] || palettes['warm-orange'];
+  return (
+    <div className={className} style={{ background: `radial-gradient(at 20% 20%, ${p.c} 0%, transparent 50%), radial-gradient(at 80% 80%, ${p.a} 0%, transparent 50%), linear-gradient(135deg, ${p.b}, ${p.a})`, position: 'relative', overflow: 'hidden', ...style }}>
+      {children}
+    </div>
+  );
+};
+
+const Logo = ({ size = 26, color = T.primary }) => (
+  <div className="flex items-center gap-2 cursor-pointer select-none">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path d="M4 12 L12 4 L20 12 L20 20 L14 20 L14 14 L10 14 L10 20 L4 20 Z" fill={color}/>
+      <circle cx="12" cy="9" r="1.5" fill={T.accent}/>
+    </svg>
+    <span style={{ fontFamily:'Fraunces,Georgia,serif', fontWeight:600, fontSize: size * 0.85, color, letterSpacing:'-0.02em' }}>toBayt</span>
+  </div>
+);
+
+// ============================================================
+// UI PRIMITIVES
+// ============================================================
+const Pill = ({ children, color, bg, className = '' }) => (
+  <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${className}`} style={{ background: bg, color }}>
+    {children}
+  </span>
+);
+
+const Btn = ({ children, variant = 'primary', size = 'md', onClick, disabled, leadingIcon: LI, trailingIcon: TI, className = '', style = {}, type = 'button' }) => {
+  const sizes = { sm:'px-3 py-1.5 text-sm gap-1.5', md:'px-4 py-2.5 text-sm gap-2', lg:'px-6 py-3 text-base gap-2' };
+  const variants = {
+    primary:  { background:T.primary,   color:'#fff',      border:'none' },
+    secondary:{ background:T.accent,    color:'#fff',      border:'none' },
+    outline:  { background:'transparent', color:T.primary, border:`1.5px solid ${T.border}` },
+    ghost:    { background:'transparent', color:T.ink700,  border:'none' },
+    danger:   { background:T.danger,    color:'#fff',      border:'none' },
+    muted:    { background:T.bgMuted,   color:T.ink700,    border:'none' },
+  };
+  return (
+    <button type={type} onClick={onClick} disabled={disabled}
+      className={`${sizes[size]} rounded-lg font-medium inline-flex items-center justify-center transition-all active:scale-[0.98] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed ${className}`}
+      style={{ ...variants[variant], ...style }}>
+      {LI && <LI size={size === 'sm' ? 14 : 16} />}
+      {children}
+      {TI && <TI size={size === 'sm' ? 14 : 16} />}
+    </button>
+  );
+};
+
+const StatusBadge = ({ status }) => {
+  const c = STATUS_COLORS[status];
+  if (!c) return null;
+  return <Pill bg={c.bg} color={c.fg}>{STATUS_LABELS[status]}</Pill>;
+};
+
+const Modal = ({ open, onClose, children, maxWidth = 560, title }) => {
+  useEffect(() => {
+    if (open) document.body.style.overflow = 'hidden';
+    else document.body.style.overflow = '';
+    return () => { document.body.style.overflow = ''; };
+  }, [open]);
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 pb-8 px-4 overflow-y-auto" style={{ background: 'rgba(26,31,44,0.55)' }} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="w-full relative rounded-2xl shadow-2xl slide-up" style={{ maxWidth, background: T.bgSurface }}>
+        {title && (
+          <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: T.border }}>
+            <h2 className="text-lg font-semibold" style={{ fontFamily:'Fraunces,serif', color: T.ink900 }}>{title}</h2>
+            <button onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-gray-100"><X size={16}/></button>
+          </div>
+        )}
+        {!title && (
+          <button onClick={onClose} className="absolute top-4 right-4 z-10 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: T.bgMuted }}>
+            <X size={16}/>
+          </button>
+        )}
+        {children}
+      </div>
+    </div>
+  );
+};
+
+const RealCalendar = ({ providerId, selectedDate, onSelect }) => {
+  const [offset, setOffset] = useState(0);
+  const viewMonth = new Date(TODAY.getFullYear(), TODAY.getMonth() + offset, 1);
+  const daysInMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 0).getDate();
+  const firstDayOfWeek = viewMonth.getDay();
+  const totalCells = Math.ceil((firstDayOfWeek + daysInMonth) / 7) * 7;
+  const windowEnd = addDays(TODAY, 60);
+  return (
+    <div className="rounded-xl p-4" style={{ background: T.bgSurface, border: `1px solid ${T.border}` }}>
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-semibold" style={{ color: T.ink900 }}>{MONTH_NAMES[viewMonth.getMonth()]} {viewMonth.getFullYear()}</span>
+        <div className="flex gap-1">
+          <button onClick={() => offset > 0 && setOffset(offset - 1)} disabled={offset === 0} className="w-7 h-7 rounded flex items-center justify-center disabled:opacity-30 hover:bg-gray-100"><ArrowLeft size={12}/></button>
+          <button onClick={() => setOffset(offset + 1)} disabled={addDays(viewMonth, 32) > windowEnd} className="w-7 h-7 rounded flex items-center justify-center disabled:opacity-30 hover:bg-gray-100"><ArrowRight size={12}/></button>
+        </div>
+      </div>
+      <div className="grid grid-cols-7 gap-1 mb-1">
+        {DAY_INITIALS.map((d, i) => <div key={i} className="text-center text-[10px] font-medium py-1" style={{ color: T.ink500 }}>{d}</div>)}
+      </div>
+      <div className="grid grid-cols-7 gap-1">
+        {[...Array(totalCells)].map((_, i) => {
+          const dnum = i - firstDayOfWeek + 1;
+          if (dnum < 1 || dnum > daysInMonth) return <div key={i}/>;
+          const date = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), dnum);
+          const isPast = date < TODAY && !isSameDate(date, TODAY);
+          const available = !isPast && date <= windowEnd && hasAnyAvailability(providerId, date);
+          const selected = isSameDate(selectedDate, date);
+          const isToday = isSameDate(date, TODAY);
+          return (
+            <button key={i} disabled={!available} onClick={() => onSelect(date)}
+              className="aspect-square rounded-md text-xs font-medium relative transition-colors"
+              style={{ background: selected ? T.primary : isToday ? T.primary100 : 'transparent', color: selected ? '#fff' : !available ? T.ink300 : T.ink900 }}>
+              {dnum}
+              {available && !selected && <div className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full" style={{ background: T.primary }}/>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// NAVBAR
+// ============================================================
+const Navbar = ({ currentPage, user, viewRole, onSetViewRole, onNavigate, onLogout, bookings, threads }) => {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const isGuest = !user;
+  const isAdmin = user?.role === 'admin';
+  const effectiveRole = isAdmin ? viewRole : (user?.role || 'client');
+
+  const unreadCount = Object.values(threads || {}).reduce((sum, msgs) =>
+    sum + (msgs || []).filter(m => m.from === 'provider' && !m.read).length, 0);
+  const pendingBookings = (bookings || []).filter(b => b.status === 'approved').length;
+
+  const clientNav = [
+    { id:'feed',     label:'Discover', icon: Compass },
+    { id:'explore',  label:'Browse',   icon: Search },
+    { id:'bookings', label:'Bookings', icon: CalendarIcon, badge: pendingBookings || null },
+    { id:'messages', label:'Inbox',    icon: MessageSquare, badge: unreadCount || null },
+  ];
+  const providerNav = [
+    { id:'dashboard',   label:'Dashboard', icon: LayoutDashboard },
+    { id:'prov-book',   label:'Bookings',  icon: CalendarIcon },
+    { id:'prov-wallet', label:'Wallet',    icon: Wallet },
+    { id:'prov-profile',label:'Profile',   icon: User },
+  ];
+  const adminNav = [{ id:'admin', label:'Admin', icon: ShieldCheck }];
+
+  let nav = [];
+  if (!isGuest) {
+    nav = effectiveRole === 'provider' ? providerNav : effectiveRole === 'admin' ? adminNav : clientNav;
+  }
+
+  return (
+    <nav className="fixed top-0 left-0 right-0 z-50 h-16 flex items-center px-6 gap-6" style={{ background: 'rgba(250,247,242,0.95)', backdropFilter: 'blur(12px)', borderBottom: `1px solid ${T.border}` }}>
+      <button onClick={() => onNavigate('landing')}><Logo size={24}/></button>
+
+      {/* Desktop nav */}
+      <div className="hidden md:flex items-center gap-1 flex-1">
+        {nav.map(item => {
+          const Icon = item.icon;
+          const active = currentPage === item.id;
+          return (
+            <button key={item.id} onClick={() => onNavigate(item.id)}
+              className="relative flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+              style={{ background: active ? T.primary100 : 'transparent', color: active ? T.primary : T.ink700 }}>
+              <Icon size={15}/>
+              {item.label}
+              {item.badge ? <span className="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full text-white" style={{ background: T.danger }}>{item.badge}</span> : null}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex-1 hidden md:block"/>
+
+      {/* Admin role switcher (only visible for admins) */}
+      {isAdmin && (
+        <div className="hidden md:flex items-center gap-1 p-1 rounded-lg" style={{ background: T.bgMuted }}>
+          {[{id:'admin',label:'Admin',icon:ShieldCheck},{id:'client',label:'Client',icon:User},{id:'provider',label:'Provider',icon:Briefcase}].map(r => (
+            <button key={r.id} onClick={() => { onSetViewRole(r.id); onNavigate(r.id === 'client' ? 'feed' : r.id === 'provider' ? 'dashboard' : 'admin'); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all"
+              style={{ background: viewRole === r.id ? T.primary : 'transparent', color: viewRole === r.id ? '#fff' : T.ink700 }}>
+              <r.icon size={12}/> {r.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Guest: Login + Sign up */}
+      {isGuest && (
+        <div className="hidden md:flex gap-2">
+          <Btn size="sm" variant="outline" leadingIcon={LogIn} onClick={() => onNavigate('login')}>Log in</Btn>
+          <Btn size="sm" leadingIcon={UserPlus} onClick={() => onNavigate('signup')}>Sign up</Btn>
+        </div>
+      )}
+
+      {/* User avatar */}
+      {!isGuest && (
+        <div className="relative">
+          <button onClick={() => setUserMenuOpen(!userMenuOpen)}
+            className="w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-semibold"
+            style={{ background: `linear-gradient(135deg, ${T.primary}, ${T.accent})`, fontFamily:'Fraunces,serif' }}>
+            {(user.name || 'U')[0].toUpperCase()}
+          </button>
+          {userMenuOpen && (
+            <div className="absolute right-0 top-12 w-56 rounded-xl shadow-lg py-1 z-50" style={{ background: T.bgSurface, border: `1px solid ${T.border}` }}>
+              <div className="px-4 py-3 border-b" style={{ borderColor: T.border }}>
+                <div className="text-sm font-semibold truncate" style={{ color:T.ink900 }}>{user.name}</div>
+                <div className="text-xs truncate" style={{ color:T.ink500 }}>{user.email}</div>
+                <div className="text-[10px] uppercase tracking-wider mt-1 inline-block px-2 py-0.5 rounded-full" style={{ background:T.primary100, color:T.primary }}>{user.role}</div>
+              </div>
+              {effectiveRole === 'client' && <button onClick={() => { onNavigate('profile'); setUserMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-2"><User size={14}/> Profile</button>}
+              <button onClick={() => { setUserMenuOpen(false); onLogout(); }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-2" style={{ color: T.danger }}><LogOut size={14}/> Sign out</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Mobile hamburger */}
+      <button className="md:hidden" onClick={() => setMobileOpen(!mobileOpen)}>
+        {mobileOpen ? <X size={20}/> : <Menu size={20}/>}
+      </button>
+
+      {/* Mobile menu */}
+      {mobileOpen && (
+        <div className="absolute top-16 left-0 right-0 md:hidden shadow-lg" style={{ background: T.bgSurface, borderBottom: `1px solid ${T.border}` }}>
+          {nav.map(item => {
+            const Icon = item.icon;
+            return (
+              <button key={item.id} onClick={() => { onNavigate(item.id); setMobileOpen(false); }}
+                className="w-full flex items-center gap-3 px-6 py-3 text-sm font-medium border-b" style={{ borderColor: T.border, color: T.ink700 }}>
+                <Icon size={16}/> {item.label}
+                {item.badge ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full text-white ml-auto" style={{ background: T.danger }}>{item.badge}</span> : null}
+              </button>
+            );
+          })}
+          {isGuest && (
+            <div className="px-6 py-3 flex gap-2">
+              <Btn size="sm" variant="outline" className="flex-1" onClick={() => { onNavigate('login'); setMobileOpen(false); }}>Log in</Btn>
+              <Btn size="sm" className="flex-1" onClick={() => { onNavigate('signup'); setMobileOpen(false); }}>Sign up</Btn>
+            </div>
+          )}
+          {!isGuest && (
+            <button onClick={() => { setMobileOpen(false); onLogout(); }} className="w-full px-6 py-3 text-sm font-medium text-left" style={{ color: T.danger }}>Sign out</button>
+          )}
+        </div>
+      )}
+    </nav>
+  );
+};
+
+// ============================================================
+// AUTH GATE WRAPPER
+// ============================================================
+const AuthGate = ({ onLogin, onSignup, children, action = 'continue' }) => (
+  <div className="max-w-md mx-auto mt-24 rounded-2xl p-8 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+    <Lock size={28} className="mx-auto mb-3" style={{ color:T.ink500 }}/>
+    <h2 className="text-xl font-semibold mb-2" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Log in to {action}</h2>
+    <p className="text-sm mb-5" style={{ color:T.ink500 }}>Sign in to manage your bookings, messages, and profile.</p>
+    <div className="flex gap-2">
+      <Btn variant="outline" className="flex-1" onClick={onLogin} leadingIcon={LogIn}>Log in</Btn>
+      <Btn className="flex-1" onClick={onSignup} leadingIcon={UserPlus}>Sign up</Btn>
+    </div>
+  </div>
+);
+
+// ============================================================
+// LOGIN PAGE
+// ============================================================
+const LoginPage = ({ onNavigate, onAuth }) => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e) => {
+    e?.preventDefault();
+    if (!email.trim() || !password) return;
+    setError(''); setSubmitting(true);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ email: email.trim(), password })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Login failed');
+      onAuth(data.token, data.user);
+    } catch (err) {
+      setError(err.message);
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4 py-16" style={{ background: `radial-gradient(at 20% 30%, ${T.primary100} 0%, transparent 50%), radial-gradient(at 80% 70%, ${T.accent100} 0%, transparent 50%), ${T.bgBase}` }}>
+      <div className="w-full max-w-md rounded-2xl p-8 shadow-lg" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        <div className="flex justify-center mb-6"><Logo size={28}/></div>
+        <h1 className="text-2xl font-semibold text-center mb-2" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Welcome back</h1>
+        <p className="text-sm text-center mb-6" style={{ color:T.ink500 }}>Log in to book, message, and track sessions.</p>
+        <form onSubmit={submit} className="flex flex-col gap-4">
+          <div>
+            <label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Email</label>
+            <div className="relative">
+              <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color:T.ink500 }}/>
+              <input value={email} onChange={e => setEmail(e.target.value)} type="text" autoComplete="username" placeholder="you@example.com" className="w-full pl-9 py-2.5 pr-3.5 rounded-lg text-sm outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Password</label>
+            <div className="relative">
+              <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color:T.ink500 }}/>
+              <input value={password} onChange={e => setPassword(e.target.value)} type="password" autoComplete="current-password" placeholder="••••" className="w-full pl-9 py-2.5 pr-3.5 rounded-lg text-sm outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+            </div>
+          </div>
+          {error && <div className="rounded-lg p-3 text-xs flex items-start gap-2" style={{ background:'#FBE2E6', color:'#8B2A38' }}><AlertCircle size={13} style={{ marginTop:1, flexShrink:0 }}/><span>{error}</span></div>}
+          <Btn size="lg" type="submit" className="w-full" disabled={submitting || !email.trim() || !password}>{submitting ? 'Logging in…' : 'Log in'}</Btn>
+        </form>
+        <div className="mt-5 text-center text-sm" style={{ color:T.ink500 }}>
+          Don't have an account? <button onClick={() => onNavigate('signup')} className="font-medium" style={{ color:T.primary }}>Sign up</button>
+        </div>
+        <div className="mt-6 pt-5 border-t text-center" style={{ borderColor:T.border }}>
+          <div className="text-xs" style={{ color:T.ink500 }}>Admin shortcut: email <span className="font-mono font-semibold" style={{ color:T.ink900 }}>1234</span> / password <span className="font-mono font-semibold" style={{ color:T.ink900 }}>1234</span></div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// SIGNUP PAGE (with role picker)
+// ============================================================
+const SignupPage = ({ onNavigate, onAuth }) => {
+  const [roleChoice, setRoleChoice] = useState(null);
+  if (!roleChoice) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4 py-16" style={{ background: `radial-gradient(at 20% 30%, ${T.primary100} 0%, transparent 50%), radial-gradient(at 80% 70%, ${T.accent100} 0%, transparent 50%), ${T.bgBase}` }}>
+        <div className="w-full max-w-lg rounded-2xl p-8 shadow-lg" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          <div className="flex justify-center mb-6"><Logo size={28}/></div>
+          <h1 className="text-2xl font-semibold text-center mb-2" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Join toBayt</h1>
+          <p className="text-sm text-center mb-8" style={{ color:T.ink500 }}>How do you want to use the platform?</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {[
+              {id:'client',title:'I want to book',sub:'Find vetted local experts and book sessions in Doha.',icon:User,color:T.primary,bg:T.primary100},
+              {id:'provider',title:'I provide services',sub:'List your services, build a clientele, get paid securely.',icon:Briefcase,color:T.accent600,bg:T.accent100},
+            ].map(o => (
+              <button key={o.id} onClick={() => setRoleChoice(o.id)} className="text-left p-5 rounded-2xl hover:shadow-md hover:-translate-y-0.5 transition-all" style={{ background:T.bgSurface, border:`2px solid ${T.border}` }}>
+                <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-3" style={{ background:o.bg }}><o.icon size={22} style={{ color:o.color }}/></div>
+                <div className="font-semibold mb-1" style={{ color:T.ink900 }}>{o.title}</div>
+                <div className="text-xs leading-relaxed" style={{ color:T.ink500 }}>{o.sub}</div>
+              </button>
+            ))}
+          </div>
+          <div className="mt-6 text-center text-sm" style={{ color:T.ink500 }}>
+            Already have an account? <button onClick={() => onNavigate('login')} className="font-medium" style={{ color:T.primary }}>Log in</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (roleChoice === 'client') return <ClientSignupForm onAuth={onAuth} onNavigate={onNavigate} onBack={() => setRoleChoice(null)}/>;
+  return <ProviderSignupForm onAuth={onAuth} onNavigate={onNavigate} onBack={() => setRoleChoice(null)}/>;
+};
+
+const ClientSignupForm = ({ onAuth, onNavigate, onBack }) => {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const valid = name.trim().length >= 2 && email.trim().includes('@') && password.length >= 4;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!valid) return;
+    setError(''); setSubmitting(true);
+    try {
+      const res = await fetch('/api/auth/signup', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), password, role:'client' })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Signup failed');
+      onAuth(data.token, data.user);
+    } catch (err) { setError(err.message); setSubmitting(false); }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4 py-16" style={{ background: `radial-gradient(at 20% 30%, ${T.primary100} 0%, transparent 50%), radial-gradient(at 80% 70%, ${T.accent100} 0%, transparent 50%), ${T.bgBase}` }}>
+      <div className="w-full max-w-md rounded-2xl p-8 shadow-lg" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        <button onClick={onBack} className="flex items-center gap-1.5 text-xs mb-4" style={{ color:T.ink500 }}><ArrowLeft size={13}/> Choose role</button>
+        <div className="flex justify-center mb-4"><Logo size={26}/></div>
+        <h1 className="text-2xl font-semibold text-center mb-1" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Create a client account</h1>
+        <p className="text-sm text-center mb-6" style={{ color:T.ink500 }}>Takes 30 seconds.</p>
+        <form onSubmit={submit} className="flex flex-col gap-4">
+          {[
+            {label:'Full name',val:name,set:setName,placeholder:'Sara Al-Mansouri',type:'text'},
+            {label:'Email',val:email,set:setEmail,placeholder:'sara@example.com',type:'email'},
+            {label:'Password (min 4 chars)',val:password,set:setPassword,placeholder:'••••',type:'password'},
+          ].map(f => (
+            <div key={f.label}>
+              <label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>{f.label}</label>
+              <input value={f.val} onChange={e => f.set(e.target.value)} type={f.type} placeholder={f.placeholder} className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+            </div>
+          ))}
+          {error && <div className="rounded-lg p-3 text-xs flex items-start gap-2" style={{ background:'#FBE2E6', color:'#8B2A38' }}><AlertCircle size={13} style={{ marginTop:1, flexShrink:0 }}/><span>{error}</span></div>}
+          <Btn size="lg" type="submit" className="w-full" disabled={submitting || !valid}>{submitting ? 'Creating account…' : 'Create account'}</Btn>
+        </form>
+        <div className="mt-5 text-center text-sm" style={{ color:T.ink500 }}>
+          Already have an account? <button onClick={() => onNavigate('login')} className="font-medium" style={{ color:T.primary }}>Log in</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
+  const [step, setStep] = useState(0);
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [cat, setCat] = useState('');
+  const [specialty, setSpecialty] = useState('');
+  const [bio, setBio] = useState('');
+  const [price, setPrice] = useState('');
+  const [residency, setResidency] = useState('');
+  const [agreed, setAgreed] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const cats = [{id:'cooking',label:'🍽️ Private Chef / Cooking'},{id:'fitness',label:'💪 Fitness & Personal Training'},{id:'wellness',label:'🥗 Nutrition & Wellness'},{id:'languages',label:'🗣️ Languages & Tutoring'},{id:'beauty',label:'✨ Beauty & Skincare'},{id:'tutoring',label:'📚 Academic Tutoring'}];
+
+  const stepLabels = ['Account','Category','Profile','Rate','Compliance','Submit'];
+  const canNext = [
+    name.trim().length >= 2 && email.trim().includes('@') && password.length >= 4,
+    !!cat,
+    specialty.trim().length >= 2 && bio.trim().length >= 20,
+    !!price && Number(price) > 0,
+    !!residency,
+    agreed,
+  ];
+
+  const submit = async () => {
+    if (!canNext.every(Boolean)) return;
+    setError(''); setSubmitting(true);
+    try {
+      const tones = {cooking:'warm-orange',fitness:'deep-teal',wellness:'soft-saffron',languages:'soft-saffron',beauty:'blush',tutoring:'deep-teal'};
+      const res = await fetch('/api/auth/signup', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          name: name.trim(), email: email.trim(), password, role:'provider',
+          providerData: { category: cat, specialty: specialty.trim(), bio: bio.trim(), priceFrom: Number(price), residency, cover: tones[cat] || 'warm-orange' }
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Signup failed');
+      onAuth(data.token, data.user);
+    } catch (err) { setError(err.message); setSubmitting(false); }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4 py-16" style={{ background: `radial-gradient(at 20% 30%, ${T.primary100} 0%, transparent 50%), radial-gradient(at 80% 70%, ${T.accent100} 0%, transparent 50%), ${T.bgBase}` }}>
+      <div className="w-full max-w-lg rounded-2xl p-8 shadow-lg" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        <button onClick={onBack} className="flex items-center gap-1.5 text-xs mb-4" style={{ color:T.ink500 }}><ArrowLeft size={13}/> Choose role</button>
+        <div className="flex justify-center mb-4"><Logo size={26}/></div>
+        <h1 className="text-xl font-semibold text-center mb-1" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Become a provider</h1>
+        <p className="text-sm text-center mb-5" style={{ color:T.ink500 }}>Applications are reviewed within 48h.</p>
+
+        <div className="flex items-center gap-1.5 mb-6">
+          {stepLabels.map((label, i) => (
+            <div key={i} className="flex-1">
+              <div className="h-1 rounded-full mb-1.5" style={{ background: i <= step ? T.accent : T.border }}/>
+              <div className="text-[9px] uppercase tracking-wider font-medium" style={{ color: i === step ? T.accent600 : T.ink500 }}>{label}</div>
+            </div>
+          ))}
+        </div>
+
+        {step === 0 && (
+          <div className="flex flex-col gap-4">
+            {[{label:'Full name',val:name,set:setName,placeholder:'Khalid Al-Thani',type:'text'},{label:'Email',val:email,set:setEmail,placeholder:'khalid@example.com',type:'email'},{label:'Password (min 4 chars)',val:password,set:setPassword,placeholder:'••••',type:'password'}].map(f => (
+              <div key={f.label}><label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>{f.label}</label><input value={f.val} onChange={e => f.set(e.target.value)} type={f.type} placeholder={f.placeholder} className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/></div>
+            ))}
+          </div>
+        )}
+        {step === 1 && (
+          <div className="flex flex-col gap-2">
+            <p className="text-sm mb-2" style={{ color:T.ink500 }}>What type of services will you offer?</p>
+            {cats.map(c => (
+              <button key={c.id} onClick={() => setCat(c.id)} className="text-left rounded-xl p-3.5 text-sm font-medium flex items-center justify-between" style={{ background:T.bgSurface, border:`2px solid ${cat===c.id ? T.accent : T.border}`, color: cat===c.id ? T.ink900 : T.ink700 }}>{c.label}{cat===c.id && <Check size={15} style={{ color:T.accent600 }}/>}</button>
+            ))}
+          </div>
+        )}
+        {step === 2 && (
+          <div className="flex flex-col gap-4">
+            <div><label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Specialty headline</label><input value={specialty} onChange={e => setSpecialty(e.target.value)} placeholder="e.g. Mediterranean Private Chef" className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/></div>
+            <div>
+              <label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Bio (min 20 chars)</label>
+              <textarea value={bio} onChange={e => setBio(e.target.value)} rows={4} placeholder="Tell clients about your background, experience, and what makes your sessions special..." className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none resize-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+              <div className="text-[10px] mt-1 text-right" style={{ color: bio.length<20 ? T.danger : T.ink500 }}>{bio.length} / 20 min</div>
+            </div>
+          </div>
+        )}
+        {step === 3 && (
+          <div className="flex flex-col gap-4">
+            <p className="text-sm" style={{ color:T.ink500 }}>Set your starting rate. You can customize pricing per service after approval.</p>
+            <div><label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Price from (QAR)</label><input value={price} onChange={e => setPrice(e.target.value.replace(/\D/g,''))} placeholder="200" className="w-full py-2.5 px-3.5 rounded-lg text-sm font-mono outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/></div>
+            <div className="rounded-xl p-4" style={{ background:T.primary100 }}>
+              <div className="text-sm font-medium mb-1" style={{ color:T.ink900 }}>toBayt fee: 12%</div>
+              <div className="text-xs" style={{ color:T.ink700 }}>You keep 88% of each booking. For QAR {price||'200'}/session you'd receive <strong>QAR {Math.round(Number(price||200)*0.88)}</strong>.</div>
+            </div>
+          </div>
+        )}
+        {step === 4 && (
+          <div className="flex flex-col gap-3">
+            <p className="text-sm" style={{ color:T.ink500 }}>Qatar law requires independent contractors to hold proper documentation.</p>
+            <div><label className="text-xs font-medium uppercase tracking-wider mb-2 block" style={{ color:T.ink500 }}>Residency status</label>
+              <div className="flex flex-col gap-1.5">
+                {['Qatari citizen','Resident (self-sponsored / CR holder)','Resident (sponsored — NOC required)','GCC national'].map(r => (
+                  <button key={r} onClick={() => setResidency(r)} className="text-left rounded-xl p-3 text-sm flex items-center justify-between" style={{ background:T.bgSurface, border:`2px solid ${residency===r ? T.primary : T.border}`, color:residency===r ? T.ink900 : T.ink700 }}>{r}{residency===r && <Check size={14} style={{ color:T.primary }}/>}</button>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-xl p-3" style={{ background:'#FBE2E6' }}><p className="text-xs" style={{ color:'#8B2A38' }}>Sponsored residents must hold a valid NOC. Applications without proper documentation will not be approved.</p></div>
+          </div>
+        )}
+        {step === 5 && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-2xl p-5" style={{ background:T.bgMuted }}>
+              {[['Account',`${name} · ${email}`],['Category',cats.find(c=>c.id===cat)?.label||cat],['Specialty',specialty],['Starting rate',`QAR ${price}`],['Residency',residency]].map(([k,v]) => (<div key={k} className="flex justify-between text-sm py-1.5"><span style={{ color:T.ink500 }}>{k}</span><span style={{ color:T.ink900, fontWeight:600, textAlign:'right' }}>{v}</span></div>))}
+            </div>
+            <label className="flex items-start gap-3 cursor-pointer"><input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} className="mt-0.5"/><span className="text-sm" style={{ color:T.ink700 }}>I confirm all information is accurate, I agree to the <strong style={{ color:T.primary }}>Provider Terms</strong>, and I understand my account is pending admin approval before it becomes bookable.</span></label>
+            {error && <div className="rounded-lg p-3 text-xs flex items-start gap-2" style={{ background:'#FBE2E6', color:'#8B2A38' }}><AlertCircle size={13} style={{ marginTop:1, flexShrink:0 }}/><span>{error}</span></div>}
+          </div>
+        )}
+
+        <div className="mt-6 flex gap-3">
+          <Btn variant="outline" onClick={step===0 ? onBack : () => setStep(step-1)} disabled={submitting}>{step===0 ? 'Back' : 'Previous'}</Btn>
+          <Btn className="flex-1" disabled={!canNext[step] || submitting} onClick={step===5 ? submit : () => setStep(step+1)} trailingIcon={step===5 ? Check : ArrowRight}>
+            {step===5 ? (submitting ? 'Submitting…' : 'Submit application') : 'Continue'}
+          </Btn>
+        </div>
+        <div className="mt-5 text-center text-sm" style={{ color:T.ink500 }}>
+          Already have an account? <button onClick={() => onNavigate('login')} className="font-medium" style={{ color:T.primary }}>Log in</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// PROVIDER CARD
+// ============================================================
+const ProviderCard = ({ provider, onClick }) => (
+  <button onClick={onClick} className="text-left rounded-2xl overflow-hidden group transition-all hover:shadow-lg hover:-translate-y-0.5 active:scale-[0.99]" style={{ background: T.bgSurface, border: `1px solid ${T.border}` }}>
+    <div className="h-36 relative">
+      <CoverArt tone={provider.cover} className="absolute inset-0"/>
+      {provider.verified && (
+        <div className="absolute top-3 right-3 w-7 h-7 rounded-full flex items-center justify-center backdrop-blur" style={{ background: 'rgba(255,255,255,0.9)' }}>
+          <ShieldCheck size={14} style={{ color: T.primary }}/>
+        </div>
+      )}
+    </div>
+    <div className="p-4">
+      <div className="text-xs font-medium uppercase tracking-wider mb-1" style={{ color: T.ink500 }}>{provider.specialty}</div>
+      <div className="text-base font-semibold leading-tight" style={{ color: T.ink900, fontFamily:'Fraunces,serif' }}>{provider.name}</div>
+      <div className="mt-2 flex items-center gap-3 text-xs" style={{ color: T.ink500 }}>
+        <span className="flex items-center gap-1"><Star size={11} fill={T.accent} color={T.accent}/> <span style={{ color:T.ink900, fontWeight:600 }}>{provider.rating}</span> ({provider.reviews})</span>
+        <span>·</span>
+        <span className="flex items-center gap-1"><MapPin size={11}/> {provider.distance} km</span>
+      </div>
+      <div className="mt-3 flex items-center justify-between">
+        <div className="text-sm" style={{ color: T.ink700 }}>From <span style={{ color:T.ink900, fontWeight:600 }}>QAR {provider.priceFrom}</span></div>
+        <span className="text-xs font-medium px-2.5 py-1 rounded-full" style={{ background: T.primary100, color: T.primary }}>Book →</span>
+      </div>
+    </div>
+  </button>
+);
+
+// ============================================================
+// POST CARD
+// ============================================================
+const PostCard = ({ post, providers, onBook, onBookCollab, onProvider }) => {
+  const provider = providers.find(p => p.id === post.providerId);
+  const partner = post.collabPartnerId ? providers.find(p => p.id === post.collabPartnerId) : null;
+  const service = post.serviceTitle && provider ? provider.services?.find(s => s.title === post.serviceTitle) : null;
+  const [liked, setLiked] = useState(false);
+  if (!provider) return null;
+  return (
+    <div className="rounded-2xl overflow-hidden fade-in" style={{ background: T.bgSurface, border: `1px solid ${T.border}` }}>
+      <div className="flex items-center gap-3 p-4">
+        {partner ? (
+          <div className="relative flex-shrink-0" style={{ width:52, height:44 }}>
+            <button onClick={() => onProvider(provider.id)} className="absolute left-0 top-0 w-11 h-11 rounded-full flex items-center justify-center text-white font-semibold ring-2 ring-white" style={{ background: T.primary, fontFamily:'Fraunces,serif' }}>{provider.name[0]}</button>
+            <button onClick={() => onProvider(partner.id)} className="absolute right-0 bottom-0 w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-semibold ring-2 ring-white" style={{ background: T.accent, fontFamily:'Fraunces,serif' }}>{partner.name[0]}</button>
+          </div>
+        ) : (
+          <button onClick={() => onProvider(provider.id)} className="w-11 h-11 rounded-full flex items-center justify-center text-white font-semibold flex-shrink-0" style={{ background: T.primary, fontFamily:'Fraunces,serif' }}>{provider.name[0]}</button>
+        )}
+        <div className="flex-1">
+          <div className="flex items-center gap-1 flex-wrap">
+            <button onClick={() => onProvider(provider.id)} className="text-sm font-semibold" style={{ color: T.ink900 }}>{provider.name}</button>
+            {provider.verified && <ShieldCheck size={13} style={{ color: T.primary }}/>}
+            {partner && <><span className="text-xs" style={{ color:T.ink500 }}>×</span><button onClick={() => onProvider(partner.id)} className="text-sm font-semibold" style={{ color:T.accent600 }}>{partner.name}</button></>}
+          </div>
+          <div className="text-xs" style={{ color: T.ink500 }}>{provider.specialty}{partner ? ` & ${partner.specialty}` : ''} · {post.time}</div>
+        </div>
+        {post.proofBadge && !partner && <Pill bg={T.primary100} color={T.primary}><ShieldCheck size={10}/> {post.proofBadge}</Pill>}
+        {post.isCollab && <Pill bg={T.accent100} color={T.accent600}><Sparkles size={10}/> Collab</Pill>}
+      </div>
+
+      <div className="relative overflow-hidden" style={{ aspectRatio:'16/9' }}>
+        <CoverArt tone={post.coverTone} className="absolute inset-0"/>
+      </div>
+
+      <div className="p-4">
+        <p className="text-sm leading-relaxed" style={{ color: T.ink900 }}>{post.caption}</p>
+
+        {post.collab && partner && (
+          <div className="mt-4 rounded-xl p-4" style={{ background:`linear-gradient(135deg,${T.primary100},${T.accent100})`, border:`1px solid ${T.border}` }}>
+            <div className="flex items-start justify-between gap-3 mb-2">
+              <div>
+                <div className="text-[10px] uppercase tracking-wider font-semibold" style={{ color:T.accent600 }}>✦ Joint offer</div>
+                <div className="text-sm font-semibold mt-1" style={{ color:T.ink900, fontFamily:'Fraunces,serif' }}>{post.collab.title}</div>
+              </div>
+              <Pill bg={T.success} color="#fff">Save QAR {post.collab.regularPrice - post.collab.bundlePrice}</Pill>
+            </div>
+            <p className="text-xs" style={{ color: T.ink700 }}>{post.collab.description}</p>
+            <div className="mt-3 flex items-end justify-between">
+              <div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-xs line-through" style={{ color:T.ink500 }}>QAR {post.collab.regularPrice}</span>
+                  <span className="text-lg font-semibold" style={{ color:T.ink900 }}>QAR {post.collab.bundlePrice}</span>
+                </div>
+                <div className="text-[10px]" style={{ color:T.ink500 }}>Booked together · paid once</div>
+              </div>
+              <Btn size="sm" onClick={() => onBookCollab(post)}>Book bundle</Btn>
+            </div>
+          </div>
+        )}
+
+        {service && !post.collab && (
+          <div className="mt-3 rounded-xl p-3 flex items-center gap-3" style={{ background:T.bgMuted }}>
+            <div className="flex-1 min-w-0">
+              <div className="text-[10px] uppercase tracking-wider font-medium" style={{ color:T.ink500 }}>This service</div>
+              <div className="text-sm font-semibold truncate" style={{ color:T.ink900 }}>{service.title}</div>
+              <div className="text-xs" style={{ color:T.ink700 }}>QAR {service.price} · {service.duration} min</div>
+            </div>
+            <Btn size="sm" onClick={() => onBook(provider.id, service.id)}>Book</Btn>
+          </div>
+        )}
+
+        <div className="mt-3 flex items-center gap-2">
+          <button onClick={() => setLiked(!liked)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: liked ? T.primary100 : 'transparent' }}>
+            <Heart size={15} fill={liked ? T.danger : 'none'} color={liked ? T.danger : T.ink500}/>
+          </button>
+          <span className="text-xs" style={{ color: T.ink500 }}>{liked ? post.likes + 1 : post.likes}</span>
+          {!service && !post.collab && (
+            <button onClick={() => onProvider(provider.id)} className="ml-2 text-xs font-medium" style={{ color:T.primary }}>View {provider.name}'s services →</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// BOOKING MODAL
+// ============================================================
+const BookingModal = ({ provider, initialServiceId, onClose, onComplete }) => {
+  const [step, setStep] = useState(0);
+  const [serviceId, setServiceId] = useState(initialServiceId || provider?.services?.[0]?.id);
+  const [locType, setLocType] = useState('client_home');
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [slot, setSlot] = useState(null);
+  if (!provider) return null;
+  const service = provider.services?.find(s => s.id === serviceId);
+  const slotsForDay = selectedDate ? getAvailableSlots(provider.id, selectedDate) : [];
+  const canContinue = step===0 ? !!serviceId : step===1 ? !!locType : step===2 ? (selectedDate && slot) : true;
+  const stepLabels = ['Service','Location','Time','Review'];
+  const next = () => step < 3 ? setStep(step+1) : onComplete({ service, locType, date: selectedDate, slot });
+  const prev = () => step > 0 ? setStep(step-1) : onClose();
+  return (
+    <Modal open onClose={onClose} maxWidth={600}>
+      <div className="p-6">
+        <div className="flex items-center gap-2 mb-6">
+          {stepLabels.map((label, i) => (
+            <div key={i} className="flex-1">
+              <div className="h-1 rounded-full mb-1.5" style={{ background: i <= step ? T.primary : T.border }}/>
+              <div className="text-[10px] uppercase tracking-wider font-medium" style={{ color: i === step ? T.primary : T.ink500 }}>{label}</div>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-3 mb-5 p-3 rounded-xl" style={{ background: T.bgMuted }}>
+          <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold" style={{ background: T.primary, fontFamily:'Fraunces,serif' }}>{provider.name[0]}</div>
+          <div><div className="text-sm font-semibold" style={{ color: T.ink900 }}>{provider.name}</div><div className="text-xs" style={{ color: T.ink500 }}>{provider.specialty}</div></div>
+        </div>
+
+        {step === 0 && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Choose a service</h3>
+            <div className="flex flex-col gap-2">
+              {provider.services?.map(s => (
+                <button key={s.id} onClick={() => setServiceId(s.id)} className="text-left rounded-xl p-4" style={{ background:T.bgSurface, border:`2px solid ${serviceId===s.id ? T.primary : T.border}` }}>
+                  <div className="flex items-start justify-between">
+                    <div><div className="text-sm font-semibold" style={{ color:T.ink900 }}>{s.title}</div><div className="text-xs mt-0.5" style={{ color:T.ink500 }}>{s.duration} min · {s.locType === 'client_home' ? 'At your place' : s.locType === 'both' ? 'Flexible' : 'At studio'}</div></div>
+                    <div className="text-base font-semibold" style={{ color:T.ink900 }}>QAR {s.price}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {step === 1 && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Where should we meet?</h3>
+            <div className="flex flex-col gap-2">
+              {[
+                { id:'client_home', icon:Home, label:'At my home', sub:'Your saved address' },
+                { id:'provider_location', icon:MapPin, label:`At ${provider.name}'s location`, sub:provider.city },
+                { id:'online', icon:MessageSquare, label:'Online', sub:'Video call · link sent 15 min before' },
+              ].map(o => {
+                const Icon = o.icon;
+                return (
+                  <button key={o.id} onClick={() => setLocType(o.id)} className="text-left rounded-xl p-4 flex items-center gap-3" style={{ background:T.bgSurface, border:`2px solid ${locType===o.id ? T.primary : T.border}` }}>
+                    <Icon size={18} style={{ color: locType===o.id ? T.primary : T.ink500 }}/>
+                    <div className="flex-1"><div className="text-sm font-semibold" style={{ color:T.ink900 }}>{o.label}</div><div className="text-xs" style={{ color:T.ink500 }}>{o.sub}</div></div>
+                    {locType===o.id && <Check size={16} style={{ color:T.primary }}/>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {step === 2 && (
+          <div>
+            <h3 className="text-lg font-semibold mb-1" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Pick a time</h3>
+            <p className="text-xs mb-4" style={{ color:T.ink500 }}>{provider.name}'s availability · next 60 days</p>
+            <RealCalendar providerId={provider.id} selectedDate={selectedDate} onSelect={d => { setSelectedDate(d); setSlot(null); }}/>
+            {selectedDate && (
+              <div className="mt-4">
+                <div className="text-xs font-medium uppercase tracking-wider mb-2" style={{ color:T.ink500 }}>Available times · {fmtDateLong(selectedDate)}</div>
+                {slotsForDay.length === 0 ? <p className="text-sm" style={{ color:T.ink500 }}>No times available on this day.</p> : (
+                  <div className="grid grid-cols-4 gap-2">
+                    {slotsForDay.map(t => (
+                      <button key={t} onClick={() => setSlot(t)} className="py-2.5 rounded-lg text-sm font-medium" style={{ background: slot===t ? T.primary : T.bgSurface, color: slot===t ? '#fff' : T.ink900, border:`1px solid ${slot===t ? T.primary : T.border}` }}>{t}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {step === 3 && service && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Review your booking</h3>
+            <div className="rounded-xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+              <div className="flex flex-col gap-3 pb-4 border-b mb-4" style={{ borderColor:T.border }}>
+                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service</span><span style={{ color:T.ink900, fontWeight:600 }}>{service.title}</span></div>
+                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>When</span><span style={{ color:T.ink900 }}>{selectedDate && slot ? `${fmtDateShort(selectedDate)} · ${slot}` : '—'}</span></div>
+                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Duration</span><span style={{ color:T.ink900 }}>{service.duration} min</span></div>
+                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Where</span><span style={{ color:T.ink900 }}>{locType==='client_home'?'Your home':locType==='online'?'Online · video call':`${provider.name}'s location`}</span></div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service price</span><span style={{ color:T.ink900 }}>QAR {service.price}</span></div>
+                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service fee</span><span style={{ color:T.ink900 }}>{locType==='online'?<span style={{color:T.success}}>Waived</span>:'QAR 12'}</span></div>
+                <div className="flex justify-between text-sm font-semibold pt-2 border-t" style={{ borderColor:T.border }}>
+                  <span style={{ color:T.ink900 }}>Total</span>
+                  <span style={{ color:T.ink900 }}>QAR {service.price + (locType==='online'?0:12)}</span>
+                </div>
+              </div>
+            </div>
+            <p className="mt-3 text-xs text-center" style={{ color:T.ink500 }}>Your card is charged only after the provider accepts.</p>
+          </div>
+        )}
+      </div>
+      <div className="px-6 py-4 flex gap-3 border-t" style={{ borderColor:T.border }}>
+        <Btn variant="outline" onClick={prev}>{step === 0 ? 'Cancel' : 'Back'}</Btn>
+        <Btn className="flex-1" onClick={next} disabled={!canContinue} trailingIcon={step===3 ? Check : ArrowRight}>
+          {step===3 ? 'Request booking' : 'Continue'}
+        </Btn>
+      </div>
+    </Modal>
+  );
+};
+
+// ============================================================
+// PAYMENT MODAL
+// ============================================================
+const PaymentModal = ({ booking, onClose, onSuccess }) => {
+  const [method, setMethod] = useState('naps');
+  const [processing, setProcessing] = useState(false);
+  if (!booking) return null;
+  const total = booking.total || 0;
+  const methods = [
+    { id:'apple_pay', label:'Apple Pay', sub:'One-tap with Face ID', icon:'⎈', bg:'#000' },
+    { id:'naps', label:'NaPS', sub:'Qatar national payment · debit', icon:'ن', bg:'#8B1538', recommended:true },
+    { id:'qpay', label:'QPAY', sub:'All Qatari banks', icon:'Q', bg:'#1E40AF' },
+    { id:'card', label:'Visa ···· 4521', sub:'Expires 09/28', icon:'VISA', bg:'#1a1f71' },
+    { id:'cash', label:'Cash on completion', sub:'No refund protection', icon:'﷼', bg:T.accent600 },
+  ];
+  const handlePay = () => { setProcessing(true); setTimeout(() => { setProcessing(false); onSuccess(method); }, 900); };
+  return (
+    <Modal open onClose={onClose} title={`Pay QAR ${total}`} maxWidth={480}>
+      <div className="p-6">
+        <div className="text-center mb-6">
+          <div className="text-4xl font-semibold" style={{ color:T.ink900, fontFamily:'Fraunces,serif' }}>QAR {total}</div>
+          <div className="text-sm mt-1" style={{ color:T.ink500 }}>{booking.serviceTitle}</div>
+        </div>
+        <div className="flex flex-col gap-2 mb-4">
+          {methods.map(m => (
+            <button key={m.id} onClick={() => setMethod(m.id)} className="rounded-xl p-3 flex items-center gap-3 text-left" style={{ background:T.bgSurface, border:`2px solid ${method===m.id ? T.primary : T.border}` }}>
+              <div className="w-12 h-8 rounded flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0" style={{ background: m.bg }}>{m.icon}</div>
+              <div className="flex-1">
+                <div className="text-sm font-semibold flex items-center gap-2" style={{ color:T.ink900 }}>
+                  {m.label}
+                  {m.recommended && <Pill bg={T.success} color="#fff" className="text-[9px] px-1.5 py-0">Recommended</Pill>}
+                </div>
+                <div className="text-xs" style={{ color:T.ink500 }}>{m.sub}</div>
+              </div>
+              {method===m.id ? <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background:T.primary }}><Check size={12} color="#fff"/></div> : <div className="w-5 h-5 rounded-full" style={{ border:`1.5px solid ${T.border}` }}/>}
+            </button>
+          ))}
+        </div>
+        <Btn size="lg" className="w-full" onClick={handlePay} disabled={processing} leadingIcon={processing ? Clock : ShieldCheck}>
+          {processing ? 'Processing…' : `Pay QAR ${total}`}
+        </Btn>
+        <p className="mt-2 text-xs text-center" style={{ color:T.ink500 }}>Secured · full refund &gt; 24h before</p>
+      </div>
+    </Modal>
+  );
+};
+
+// ============================================================
+// RESCHEDULE MODAL
+// ============================================================
+const RescheduleModal = ({ booking, providers, onClose, onComplete }) => {
+  const provider = providers.find(p => p.id === booking?.providerId);
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [slot, setSlot] = useState(null);
+  const slotsForDay = selectedDate && provider ? getAvailableSlots(provider.id, selectedDate) : [];
+  if (!booking || !provider) return null;
+  return (
+    <Modal open onClose={onClose} title="Reschedule booking" maxWidth={520}>
+      <div className="p-6">
+        <div className="rounded-xl p-3 flex items-center gap-2 mb-4" style={{ background:T.bgMuted }}>
+          <Clock size={14} style={{ color:T.ink500 }}/>
+          <span className="text-sm" style={{ color:T.ink700 }}>Currently: <strong style={{ color:T.ink900 }}>{booking.when}</strong></span>
+        </div>
+        <RealCalendar providerId={provider.id} selectedDate={selectedDate} onSelect={d => { setSelectedDate(d); setSlot(null); }}/>
+        {selectedDate && (
+          <div className="mt-4">
+            <div className="text-xs font-medium uppercase tracking-wider mb-2" style={{ color:T.ink500 }}>Available times · {fmtDateLong(selectedDate)}</div>
+            {slotsForDay.length === 0 ? <p className="text-sm" style={{ color:T.ink500 }}>No times available.</p> : (
+              <div className="grid grid-cols-4 gap-2">
+                {slotsForDay.map(t => <button key={t} onClick={() => setSlot(t)} className="py-2 rounded-lg text-sm font-medium" style={{ background: slot===t ? T.primary : T.bgSurface, color: slot===t ? '#fff' : T.ink900, border:`1px solid ${slot===t ? T.primary : T.border}` }}>{t}</button>)}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="px-6 py-4 flex gap-3 border-t" style={{ borderColor:T.border }}>
+        <Btn variant="outline" onClick={onClose}>Cancel</Btn>
+        <Btn className="flex-1" disabled={!selectedDate || !slot} onClick={() => onComplete(booking.id, selectedDate, slot)}>Confirm new time</Btn>
+      </div>
+    </Modal>
+  );
+};
+
+// ============================================================
+// LANDING PAGE
+// ============================================================
+const LandingPage = ({ onNavigate, isAuthed }) => {
+  const features = [
+    { icon:'🍽️', title:'Private Chefs', desc:'Restaurant-quality meals in your home.' },
+    { icon:'💪', title:'Fitness Coaches', desc:'Personal training, at your gym or theirs.' },
+    { icon:'📚', title:'Tutors', desc:'IGCSE, IB, language courses — in person.' },
+    { icon:'✨', title:'Beauty', desc:'At-home facials, bridal makeup, and more.' },
+    { icon:'🥗', title:'Nutritionists', desc:'Sustainable plans built around your life.' },
+    { icon:'🗣️', title:'Language Tutors', desc:'Arabic, English, and more — native speakers.' },
+  ];
+  return (
+    <div>
+      <section className="relative overflow-hidden" style={{ background:`radial-gradient(at 20% 30%, ${T.primary100} 0%, transparent 50%), radial-gradient(at 80% 70%, ${T.accent100} 0%, transparent 50%), ${T.bgBase}`, minHeight:'80vh', display:'flex', alignItems:'center' }}>
+        <div className="max-w-6xl mx-auto px-8 py-20 grid md:grid-cols-2 gap-12 items-center">
+          <div>
+            <div className="inline-flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full mb-6" style={{ background:T.accent100, color:T.accent600 }}>⌁ Doha · Qatar · Beta</div>
+            <h1 className="text-5xl lg:text-6xl font-medium tracking-tight leading-[1.05]" style={{ fontFamily:'Fraunces,Georgia,serif', color:T.ink900 }}>
+              Book local <em style={{ color:T.primary, fontStyle:'italic' }}>experts</em>.<br/>
+              Build habits.<br/>
+              Share <em style={{ color:T.accent600, fontStyle:'italic' }}>progress</em>.
+            </h1>
+            <p className="mt-6 text-lg leading-relaxed" style={{ color:T.ink700 }}>
+              Private chefs, fitness coaches, tutors, and more — vetted, nearby, and ready when you are.
+            </p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <Btn size="lg" onClick={() => onNavigate('explore')} trailingIcon={ArrowRight}>Browse experts</Btn>
+              {!isAuthed && <Btn size="lg" variant="outline" onClick={() => onNavigate('signup')}>Sign up</Btn>}
+              {isAuthed && <Btn size="lg" variant="outline" onClick={() => onNavigate('feed')}>See the feed</Btn>}
+            </div>
+          </div>
+          <div className="hidden md:grid grid-cols-2 gap-3">
+            {['warm-orange','deep-teal','soft-saffron','blush'].map((tone, i) => (
+              <CoverArt key={i} tone={tone} className={`rounded-2xl ${i===1?'mt-6':''}`} style={{ aspectRatio:'1', height:'auto' }}/>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="py-20 px-8" style={{ background:T.bgSurface }}>
+        <div className="max-w-6xl mx-auto">
+          <h2 className="text-3xl font-medium mb-2" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>What are you looking for?</h2>
+          <p className="mb-10" style={{ color:T.ink700 }}>Six categories of vetted local experts in Doha.</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {features.map(f => (
+              <button key={f.title} onClick={() => onNavigate('explore')} className="rounded-2xl p-5 text-left hover:shadow-md hover:-translate-y-0.5 transition-all" style={{ background:T.bgBase, border:`1px solid ${T.border}` }}>
+                <div className="text-3xl mb-3">{f.icon}</div>
+                <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{f.title}</div>
+                <div className="text-xs mt-1" style={{ color:T.ink500 }}>{f.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="py-20 px-8" style={{ background:T.primary }}>
+        <div className="max-w-2xl mx-auto text-center">
+          <h2 className="text-4xl font-medium mb-4 text-white" style={{ fontFamily:'Fraunces,serif' }}>Ready to start?</h2>
+          <p className="mb-8 text-white/80">Join hundreds of Doha residents who've found their go-to experts on toBayt.</p>
+          {isAuthed ? <Btn size="lg" variant="secondary" onClick={() => onNavigate('explore')} trailingIcon={ArrowRight}>Explore experts</Btn>
+            : <Btn size="lg" variant="secondary" onClick={() => onNavigate('signup')} trailingIcon={ArrowRight}>Create your account</Btn>}
+        </div>
+      </section>
+
+      <footer className="py-10 px-8 border-t" style={{ background:T.bgSurface, borderColor:T.border }}>
+        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+          <Logo size={22}/>
+          <div className="flex items-center gap-6 text-sm" style={{ color:T.ink500 }}>
+            <button onClick={() => onNavigate('terms')} className="hover:underline">Terms</button>
+            <span>·</span><span>Privacy</span><span>·</span><span>Doha, Qatar</span>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+};
+
+// ============================================================
+// FEED PAGE
+// ============================================================
+const FeedPage = ({ providers, posts, onNavigate, onBook, onBookCollab }) => {
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="grid lg:grid-cols-[2fr_1fr] gap-8">
+        <div>
+          <div className="mb-6">
+            <div className="text-xs uppercase tracking-wider mb-1" style={{ color:T.ink500 }}>Discover</div>
+            <h1 className="text-2xl font-semibold" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>See what experts have done lately.</h1>
+            <p className="text-sm mt-1" style={{ color:T.ink500 }}>Real outcomes from completed bookings.</p>
+          </div>
+          <div className="flex flex-col gap-5">
+            {posts.map(post => (
+              <PostCard key={post.id} post={post} providers={providers} onBook={onBook} onBookCollab={onBookCollab} onProvider={id => onNavigate('provider', { providerId: id })}/>
+            ))}
+          </div>
+        </div>
+        <div className="space-y-6">
+          <div className="sticky top-24">
+            <div className="rounded-2xl p-4" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold" style={{ color:T.ink900 }}>Featured experts</h3>
+                <button onClick={() => onNavigate('explore')} className="text-xs font-medium" style={{ color:T.primary }}>See all →</button>
+              </div>
+              <div className="flex flex-col gap-2">
+                {providers.slice(0,5).map(p => (
+                  <button key={p.id} onClick={() => onNavigate('provider', { providerId: p.id })} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 text-left">
+                    <CoverArt tone={p.cover} className="w-10 h-10 rounded-lg flex-shrink-0"/>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1">
+                        <span className="text-sm font-semibold truncate" style={{ color:T.ink900 }}>{p.name}</span>
+                        {p.verified && <ShieldCheck size={12} style={{ color:T.primary }}/>}
+                      </div>
+                      <div className="text-xs" style={{ color:T.ink500 }}>{p.specialty} · ★ {p.rating}</div>
+                    </div>
+                    <span className="text-xs font-semibold flex-shrink-0" style={{ color:T.ink900 }}>QAR {p.priceFrom}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// EXPLORE PAGE
+// ============================================================
+const ExplorePage = ({ providers, initialCat, onNavigate }) => {
+  const [cat, setCat] = useState(initialCat || 'all');
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState('recommended');
+  const [maxPrice, setMaxPrice] = useState(700);
+  const [verifiedOnly, setVerifiedOnly] = useState(false);
+  const categories = [
+    { id:'cooking', label:'Cooking', icon:'🍽️' }, { id:'fitness', label:'Fitness', icon:'💪' },
+    { id:'wellness', label:'Wellness', icon:'🥗' }, { id:'languages', label:'Languages', icon:'🗣️' },
+    { id:'beauty', label:'Beauty', icon:'✨' }, { id:'tutoring', label:'Tutoring', icon:'📚' },
+  ];
+  const filtered = providers.filter(p =>
+    (cat === 'all' || p.cat === cat) &&
+    (query === '' || p.name.toLowerCase().includes(query.toLowerCase()) || p.specialty.toLowerCase().includes(query.toLowerCase())) &&
+    p.priceFrom <= maxPrice && (!verifiedOnly || p.verified)
+  ).sort((a, b) => {
+    if (sort === 'price_asc') return a.priceFrom - b.priceFrom;
+    if (sort === 'price_desc') return b.priceFrom - a.priceFrom;
+    if (sort === 'rating') return b.rating - a.rating;
+    if (sort === 'distance') return a.distance - b.distance;
+    return 0;
+  });
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Browse experts.</h1>
+        <p className="text-sm mt-1" style={{ color:T.ink500 }}>{filtered.length} providers in Doha.</p>
+      </div>
+      <div className="flex gap-8">
+        <aside className="hidden lg:block w-64 flex-shrink-0">
+          <div className="sticky top-24 rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+            <h3 className="text-sm font-semibold mb-4" style={{ color:T.ink900 }}>Filters</h3>
+            <div className="mb-5">
+              <div className="text-[10px] uppercase tracking-wider font-medium mb-2" style={{ color:T.ink500 }}>Category</div>
+              <div className="flex flex-col gap-1">
+                <button onClick={() => setCat('all')} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left" style={{ background: cat==='all' ? T.primary100 : 'transparent', color: cat==='all' ? T.primary : T.ink700 }}>All</button>
+                {categories.map(c => (
+                  <button key={c.id} onClick={() => setCat(c.id)} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left" style={{ background: cat===c.id ? T.primary100 : 'transparent', color: cat===c.id ? T.primary : T.ink700 }}>
+                    {c.icon} {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mb-5">
+              <div className="text-[10px] uppercase tracking-wider font-medium mb-2" style={{ color:T.ink500 }}>Sort by</div>
+              <select value={sort} onChange={e => setSort(e.target.value)} className="w-full py-2 px-3 rounded-lg text-sm outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}>
+                <option value="recommended">Recommended</option>
+                <option value="price_asc">Price: low to high</option>
+                <option value="price_desc">Price: high to low</option>
+                <option value="rating">Highest rated</option>
+                <option value="distance">Nearest first</option>
+              </select>
+            </div>
+            <div className="mb-5">
+              <div className="flex justify-between mb-2"><div className="text-[10px] uppercase tracking-wider font-medium" style={{ color:T.ink500 }}>Max price</div><span className="text-xs font-semibold" style={{ color:T.ink900 }}>QAR {maxPrice}</span></div>
+              <input type="range" min="50" max="700" step="10" value={maxPrice} onChange={e => setMaxPrice(Number(e.target.value))} className="w-full" style={{ accentColor:T.primary }}/>
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={verifiedOnly} onChange={e => setVerifiedOnly(e.target.checked)}/>
+              <span style={{ color:T.ink700 }}>Verified only</span>
+            </label>
+          </div>
+        </aside>
+        <div className="flex-1">
+          <div className="relative mb-6">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color:T.ink500 }}/>
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search providers…" className="w-full pl-10 py-3 pr-3 rounded-xl text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filtered.map(p => <ProviderCard key={p.id} provider={p} onClick={() => onNavigate('provider', { providerId: p.id })}/>)}
+          </div>
+          {filtered.length === 0 && <div className="text-center py-16 rounded-2xl" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink500 }}>No providers match your filters.</div>}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// PROVIDER PAGE
+// ============================================================
+const ProviderPage = ({ provider, onNavigate, onBook, onMessage }) => {
+  if (!provider) return <div className="max-w-4xl mx-auto px-4 py-16 text-center"><p style={{ color:T.ink500 }}>Provider not found.</p></div>;
+  return (
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
+      <button onClick={() => onNavigate(-1)} className="flex items-center gap-2 text-sm mb-4" style={{ color:T.primary }}><ArrowLeft size={15}/> Back</button>
+      <CoverArt tone={provider.cover} className="rounded-2xl mb-6 relative" style={{ height:200 }}>
+        {provider.verified && <div className="absolute top-4 right-4 px-3 py-1.5 rounded-full flex items-center gap-1.5 text-xs font-medium" style={{ background:'rgba(255,255,255,0.95)', color:T.primary }}><ShieldCheck size={13}/> Verified</div>}
+      </CoverArt>
+      <div className="grid md:grid-cols-[1fr_300px] gap-6">
+        <div>
+          <div className="text-sm font-medium" style={{ color:T.accent600 }}>{provider.specialty}</div>
+          <h1 className="text-3xl font-semibold mt-1" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>{provider.name}</h1>
+          <div className="flex items-center gap-4 mt-2 text-sm" style={{ color:T.ink500 }}>
+            <span className="flex items-center gap-1"><Star size={14} fill={T.accent} color={T.accent}/> <strong style={{ color:T.ink900 }}>{provider.rating}</strong> ({provider.reviews} reviews)</span>
+            <span className="flex items-center gap-1"><MapPin size={14}/> {provider.city} · {provider.distance} km</span>
+          </div>
+          <p className="mt-4 text-sm leading-relaxed" style={{ color:T.ink700 }}>{provider.bio}</p>
+          <h2 className="mt-8 text-lg font-semibold mb-3" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Services</h2>
+          <div className="flex flex-col gap-3">
+            {provider.services?.map(s => (
+              <div key={s.id} className="rounded-xl p-4 flex items-center gap-4" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{s.title}</div>
+                  <div className="text-xs mt-0.5" style={{ color:T.ink500 }}>{s.duration} min · {s.locType === 'client_home' ? 'At your place' : s.locType === 'both' ? 'Flexible' : 'At their location'}</div>
+                </div>
+                <div className="text-base font-semibold" style={{ color:T.ink900 }}>QAR {s.price}</div>
+                <Btn size="sm" onClick={() => onBook(s.id)}>Book</Btn>
+              </div>
+            ))}
+          </div>
+        </div>
+        <aside>
+          <div className="sticky top-24 rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+            <div className="text-xs uppercase tracking-wider mb-1" style={{ color:T.ink500 }}>Starting from</div>
+            <div className="text-2xl font-semibold mb-4" style={{ color:T.ink900 }}>QAR {provider.priceFrom}</div>
+            <Btn className="w-full mb-2" onClick={() => onBook(null)}>Book a session</Btn>
+            <Btn variant="outline" className="w-full" leadingIcon={MessageSquare} onClick={() => onMessage(provider)}>Message</Btn>
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// BOOKINGS PAGE
+// ============================================================
+const BookingsPage = ({ bookings, onNavigate, onPay, onCancel, onReschedule, providers }) => {
+  const [tab, setTab] = useState('upcoming');
+  const now = Date.now();
+  const upcoming = bookings.filter(b => !['cancelled','completed','rejected'].includes(b.status) && new Date(b.date).getTime() > now);
+  const past = bookings.filter(b => ['completed','cancelled','rejected'].includes(b.status) || new Date(b.date).getTime() <= now);
+  const list = tab === 'upcoming' ? upcoming : past;
+  return (
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
+      <h1 className="text-2xl font-semibold mb-6" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>My bookings</h1>
+      <div className="flex gap-1 p-1 rounded-xl w-fit mb-6" style={{ background:T.bgMuted }}>
+        {[{id:'upcoming',label:`Upcoming (${upcoming.length})`},{id:'past',label:`Past (${past.length})`}].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} className="px-5 py-2 rounded-lg text-sm font-medium" style={{ background: tab===t.id ? T.bgSurface : 'transparent', color: tab===t.id ? T.ink900 : T.ink500 }}>{t.label}</button>
+        ))}
+      </div>
+      {list.length === 0 && (
+        <div className="rounded-2xl p-12 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          <CalendarIcon size={32} className="mx-auto mb-3" style={{ color:T.ink300 }}/>
+          <div className="text-sm font-medium" style={{ color:T.ink900 }}>No {tab} bookings yet</div>
+          <Btn className="mt-4" onClick={() => onNavigate('explore')}>Browse experts</Btn>
+        </div>
+      )}
+      <div className="flex flex-col gap-3">
+        {list.map(b => (
+          <div key={b.id} className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+            <div className="flex items-start gap-4">
+              <CoverArt tone={b.providerCover} className="w-12 h-12 rounded-xl flex-shrink-0"/>
+              <div className="flex-1">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="font-semibold" style={{ color:T.ink900 }}>{b.providerName}</div>
+                    <div className="text-sm" style={{ color:T.ink500 }}>{b.serviceTitle}</div>
+                    <div className="text-sm mt-0.5" style={{ color:T.ink700 }}>{b.when} · <strong style={{ color:T.ink900 }}>QAR {b.total}</strong></div>
+                  </div>
+                  <StatusBadge status={b.status}/>
+                </div>
+                <div className="mt-3 flex gap-2 flex-wrap">
+                  {b.status === 'approved' && <Btn size="sm" onClick={() => onPay(b.id)}>Pay QAR {b.total}</Btn>}
+                  <Btn size="sm" variant="outline" leadingIcon={MessageSquare} onClick={() => onNavigate('messages', { bookingId: b.id })}>Message</Btn>
+                  {['pending','confirmed','approved'].includes(b.status) && <Btn size="sm" variant="ghost" onClick={() => onReschedule(b)}>Reschedule</Btn>}
+                  {['pending','confirmed','approved'].includes(b.status) && <Btn size="sm" variant="ghost" onClick={() => onCancel(b.id, b.total)} style={{ color:T.danger }}>Cancel</Btn>}
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// MESSAGES PAGE
+// ============================================================
+const MessagesPage = ({ bookings, threads, onSend, onMarkRead, initialBookingId }) => {
+  const [activeId, setActiveId] = useState(initialBookingId || null);
+  const [draft, setDraft] = useState('');
+  const messagesEndRef = useRef(null);
+  const eligible = bookings.filter(b => !b.isCollab && b.providerId);
+  const activeBooking = eligible.find(b => b.id === activeId);
+  const activeThread = activeId ? (threads[activeId] || []) : [];
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior:'smooth' }); }, [activeThread.length, activeId]);
+  useEffect(() => { if (activeId) onMarkRead(activeId); }, [activeId]);
+  const send = () => { if (!draft.trim() || !activeId) return; onSend(activeId, draft.trim()); setDraft(''); };
+  const getUnread = (id) => (threads[id] || []).filter(m => m.from === 'provider' && !m.read).length;
+  return (
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+      <h1 className="text-2xl font-semibold mb-6" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Inbox</h1>
+      <div className="grid lg:grid-cols-[320px_1fr] gap-4" style={{ height:'calc(100vh - 220px)', minHeight:500 }}>
+        <div className="rounded-2xl overflow-hidden flex flex-col" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          <div className="p-4 border-b" style={{ borderColor:T.border }}>
+            <div className="text-xs uppercase tracking-wider font-medium" style={{ color:T.ink500 }}>Conversations</div>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {eligible.length === 0 && <div className="p-8 text-center text-sm" style={{ color:T.ink500 }}>No conversations yet.</div>}
+            {eligible.map(b => {
+              const thread = threads[b.id] || [];
+              const last = thread[thread.length - 1];
+              const unread = getUnread(b.id);
+              return (
+                <button key={b.id} onClick={() => setActiveId(b.id)} className="w-full flex items-center gap-3 p-4 text-left border-b" style={{ borderColor:T.border, background: activeId===b.id ? T.primary100 : 'transparent' }}>
+                  <CoverArt tone={b.providerCover} className="w-11 h-11 rounded-full flex-shrink-0"/>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-semibold truncate" style={{ color: activeId===b.id ? T.primary : T.ink900 }}>{b.providerName}</span>
+                      <span className="text-[10px] flex-shrink-0" style={{ color:T.ink500 }}>{last?.time || ''}</span>
+                    </div>
+                    <div className="text-[10px] truncate" style={{ color:T.accent600 }}>{b.serviceTitle}</div>
+                    <div className="text-xs mt-0.5 truncate" style={{ color: unread ? T.ink900 : T.ink500, fontWeight: unread ? 500 : 400 }}>
+                      {last?.system ? last.text : last ? `${last.from==='client'?'You: ':''}${last.text}` : 'No messages yet'}
+                    </div>
+                  </div>
+                  {unread > 0 && <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0" style={{ background:T.accent }}>{unread}</div>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="rounded-2xl overflow-hidden flex flex-col" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          {!activeBooking ? (
+            <div className="flex-1 flex items-center justify-center flex-col gap-3" style={{ color:T.ink500 }}>
+              <MessageSquare size={32} style={{ color:T.ink300 }}/>
+              <p className="text-sm">Select a conversation</p>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-3 p-4 border-b" style={{ borderColor:T.border }}>
+                <CoverArt tone={activeBooking.providerCover} className="w-9 h-9 rounded-full flex-shrink-0"/>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{activeBooking.providerName}</div>
+                  <div className="text-xs" style={{ color:T.ink500 }}>{activeBooking.serviceTitle} · {activeBooking.when}</div>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+                {activeThread.length === 0 && <div className="text-center text-xs py-4" style={{ color:T.ink500 }}>No messages yet. Say hello!</div>}
+                {activeThread.map((m, i) => {
+                  if (m.system) return (
+                    <div key={i} className="self-center text-center">
+                      <div className="rounded-full px-3 py-1.5 text-xs inline-block" style={{ background:T.bgMuted, color:T.ink700 }}>
+                        {m.icon==='calendar'&&'📅 '}{m.icon==='check'&&'✓ '}{m.text}
+                      </div>
+                    </div>
+                  );
+                  const mine = m.from === 'client';
+                  return (
+                    <div key={i} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                      <div className="max-w-[70%] px-3.5 py-2 rounded-2xl text-sm" style={{ background: mine ? T.primary : T.bgMuted, color: mine ? '#fff' : T.ink900 }}>{m.text}</div>
+                      <div className="text-[10px] mt-0.5 px-1" style={{ color:T.ink500 }}>{m.time}</div>
+                    </div>
+                  );
+                })}
+                <div ref={messagesEndRef}/>
+              </div>
+              <div className="flex items-end gap-2 p-3 border-t" style={{ borderColor:T.border }}>
+                <textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="Type a message…" rows={1} className="flex-1 py-2 px-3 rounded-xl text-sm outline-none resize-none" style={{ background:T.bgMuted, color:T.ink900 }}/>
+                <button onClick={send} disabled={!draft.trim()} className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 disabled:opacity-30" style={{ background:T.primary }}>
+                  <Send size={15} color="#fff"/>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// PROFILE PAGE
+// ============================================================
+const ProfilePage = ({ user, onNavigate, onLogout }) => (
+  <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 grid md:grid-cols-[240px_1fr] gap-8">
+    <div>
+      <div className="rounded-2xl p-6 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        <div className="w-20 h-20 rounded-full mx-auto flex items-center justify-center text-white text-2xl font-medium mb-3" style={{ background:`linear-gradient(135deg,${T.primary},${T.accent})`, fontFamily:'Fraunces,serif' }}>{(user?.name||'?')[0].toUpperCase()}</div>
+        <div className="font-semibold" style={{ color:T.ink900, fontFamily:'Fraunces,serif' }}>{user?.name}</div>
+        <div className="text-xs mt-0.5" style={{ color:T.ink500 }}>{user?.email}</div>
+        <div className="text-[10px] uppercase tracking-wider mt-2 inline-block px-2 py-0.5 rounded-full" style={{ background:T.primary100, color:T.primary }}>{user?.role}</div>
+      </div>
+      <div className="mt-4 rounded-2xl overflow-hidden" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        {[
+          {icon:CalendarIcon,label:'My bookings',onClick:()=>onNavigate('bookings')},
+          {icon:MessageSquare,label:'Messages',onClick:()=>onNavigate('messages')},
+          {icon:FileText,label:'Terms',onClick:()=>onNavigate('terms')},
+          {icon:LogOut,label:'Sign out',danger:true,onClick:onLogout},
+        ].map((item,i,arr) => (
+          <button key={i} onClick={item.onClick} className="w-full flex items-center gap-3 p-4 text-left hover:bg-gray-50" style={{ borderBottom: i<arr.length-1 ? `1px solid ${T.border}` : 'none', color: item.danger ? T.danger : T.ink700 }}>
+            <item.icon size={15} style={{ color: item.danger ? T.danger : T.ink500 }}/>
+            <div className="flex-1 text-sm font-medium" style={{ color: item.danger ? T.danger : T.ink900 }}>{item.label}</div>
+            {!item.danger && <ChevronRight size={14} style={{ color:T.ink300 }}/>}
+          </button>
+        ))}
+      </div>
+    </div>
+    <div>
+      <h1 className="text-2xl font-semibold mb-5" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Account overview</h1>
+      <div className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        <h2 className="text-base font-semibold mb-4" style={{ color:T.ink900 }}>Quick actions</h2>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            {label:'Browse experts',icon:Compass,action:()=>onNavigate('explore')},
+            {label:'My bookings',icon:CalendarIcon,action:()=>onNavigate('bookings')},
+            {label:'Messages',icon:MessageSquare,action:()=>onNavigate('messages')},
+            {label:'Discover',icon:Sparkles,action:()=>onNavigate('feed')},
+          ].map((a,i) => (
+            <button key={i} onClick={a.action} className="flex items-center gap-3 p-3 rounded-xl text-left hover:bg-gray-50" style={{ border:`1px solid ${T.border}` }}>
+              <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background:T.primary100 }}><a.icon size={16} style={{ color:T.primary }}/></div>
+              <span className="text-sm font-medium" style={{ color:T.ink900 }}>{a.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+// ============================================================
+// PROVIDER DASHBOARD
+// ============================================================
+const ProviderDashboard = ({ user, providers }) => {
+  const me = providers.find(p => p.id === user?.providerId) || providers.find(p => p.id === 'p2');
+  const isPending = me?.status === 'pending';
+  return (
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+      <h1 className="text-2xl font-semibold mb-2" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Hi, {me?.name || user?.name}.</h1>
+      {isPending && (
+        <div className="rounded-xl p-4 mb-6 flex items-start gap-3" style={{ background:T.accent100, border:`1px solid ${T.accent+'33'}` }}>
+          <Clock size={18} style={{ color:T.accent600, marginTop:2, flexShrink:0 }}/>
+          <div>
+            <div className="text-sm font-semibold" style={{ color:T.ink900 }}>Application under review</div>
+            <div className="text-xs mt-1" style={{ color:T.ink700 }}>Your provider profile is pending admin approval. You'll appear in the explore page and be bookable once approved (usually within 48h).</div>
+          </div>
+        </div>
+      )}
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        {[{label:"Today's bookings",value:'0',icon:CalendarIcon,tone:'primary'},{label:'Pending requests',value:'0',icon:Zap,tone:'accent'},{label:'This month',value:'QAR 0',icon:Wallet,tone:'primary'},{label:'Rating',value:me?.rating ? `${me.rating} ★` : 'New',icon:Star,tone:'accent'}].map((k,i) => (
+          <div key={i} className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ background: k.tone==='primary' ? T.primary100 : T.accent100 }}>
+              <k.icon size={18} style={{ color: k.tone==='primary' ? T.primary : T.accent600 }}/>
+            </div>
+            <div className="text-xs" style={{ color:T.ink500 }}>{k.label}</div>
+            <div className="text-xl font-semibold mt-0.5" style={{ color:T.ink900 }}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+      <div className="rounded-2xl p-8 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        <Sparkles size={28} className="mx-auto mb-3" style={{ color:T.accent }}/>
+        <div className="font-semibold mb-1" style={{ color:T.ink900 }}>Welcome to toBayt</div>
+        <div className="text-sm" style={{ color:T.ink500 }}>Your dashboard will populate as bookings come in.</div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// PROVIDER BOOKINGS PAGE
+// ============================================================
+const ProviderBookingsPage = ({ bookings }) => (
+  <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
+    <h1 className="text-2xl font-semibold mb-6" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Bookings</h1>
+    {bookings.length === 0 && (
+      <div className="rounded-2xl p-12 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        <CalendarIcon size={32} className="mx-auto mb-3" style={{ color:T.ink300 }}/>
+        <div className="text-sm" style={{ color:T.ink500 }}>No bookings yet. Once approved, clients can book you.</div>
+      </div>
+    )}
+    <div className="flex flex-col gap-3">
+      {bookings.map(b => (
+        <div key={b.id} className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold" style={{ background:T.primary, fontFamily:'Fraunces,serif' }}>C</div>
+            <div className="flex-1">
+              <div className="font-semibold" style={{ color:T.ink900 }}>Client</div>
+              <div className="text-sm" style={{ color:T.ink500 }}>{b.serviceTitle}</div>
+              <div className="text-sm mt-0.5" style={{ color:T.ink700 }}>{b.when} · <strong style={{ color:T.ink900 }}>QAR {b.total}</strong></div>
+            </div>
+            <StatusBadge status={b.status}/>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+// ============================================================
+// PROVIDER WALLET
+// ============================================================
+const ProviderWalletPage = () => (
+  <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
+    <h1 className="text-2xl font-semibold mb-6" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Wallet</h1>
+    <div className="rounded-2xl p-8 mb-6" style={{ background:T.primary, color:'#fff' }}>
+      <div className="text-sm opacity-70 mb-2">Available balance</div>
+      <div className="text-5xl font-semibold mb-1" style={{ fontFamily:'Fraunces,serif' }}>0</div>
+      <div className="text-sm opacity-70 mb-6">QAR</div>
+      <div className="flex gap-3">
+        <button onClick={() => showToast('No funds to withdraw yet')} className="px-5 py-2.5 rounded-lg text-sm font-medium" style={{ background:T.bgSurface, color:T.primary }}>Withdraw</button>
+        <button onClick={() => showToast('No transactions yet')} className="px-5 py-2.5 rounded-lg text-sm font-medium" style={{ background:'rgba(255,255,255,0.15)', color:'#fff' }}>Statement</button>
+      </div>
+    </div>
+    <div className="rounded-2xl p-8 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+      <Wallet size={28} className="mx-auto mb-3" style={{ color:T.ink300 }}/>
+      <div className="font-semibold mb-1" style={{ color:T.ink900 }}>No transactions yet</div>
+      <div className="text-sm" style={{ color:T.ink500 }}>Once clients book and pay, earnings will appear here.</div>
+    </div>
+  </div>
+);
+
+// ============================================================
+// PROVIDER PROFILE (provider's own profile editor)
+// ============================================================
+const ProviderProfilePage = ({ user, providers, onProviderUpdate }) => {
+  const me = providers.find(p => p.id === user?.providerId) || providers.find(p => p.id === 'p2');
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({});
+  useEffect(() => { if (me) setDraft({ name: me.name, specialty: me.specialty, bio: me.bio, priceFrom: me.priceFrom, city: me.city }); }, [me?.id]);
+  if (!me) return null;
+  const save = async () => {
+    try {
+      const res = await apiFetch(`/api/providers/${me.id}`, { method:'PUT', body: JSON.stringify({ ...draft, priceFrom: Number(draft.priceFrom) }) });
+      if (!res.ok) throw new Error('Failed');
+      const updated = await res.json();
+      onProviderUpdate(updated);
+      showToast('Profile updated', 'success');
+      setEditing(false);
+    } catch (e) { showToast('Failed to save', 'error'); }
+  };
+  return (
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
+      <div className="rounded-2xl p-6 mb-6" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        <div className="flex items-start gap-5">
+          <div className="relative">
+            <div className="w-20 h-20 rounded-full flex items-center justify-center text-white text-2xl font-semibold" style={{ background:`linear-gradient(135deg,${T.primary},${T.accent})`, fontFamily:'Fraunces,serif' }}>{me.name[0]}</div>
+            {me.verified && <div className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full flex items-center justify-center" style={{ background:T.bgSurface, border:`2px solid ${T.bgBase}` }}><ShieldCheck size={14} style={{ color:T.primary }}/></div>}
+          </div>
+          <div className="flex-1">
+            {!editing ? (
+              <>
+                <h1 className="text-2xl font-semibold" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>{me.name}</h1>
+                <div className="text-sm mt-0.5" style={{ color:T.accent600 }}>{me.specialty}{me.verified ? ' · Verified' : me.status === 'pending' ? ' · Pending review' : ''}</div>
+                <p className="mt-2 text-sm leading-relaxed" style={{ color:T.ink700 }}>{me.bio}</p>
+                <div className="mt-3 text-sm" style={{ color:T.ink500 }}>From <strong style={{ color:T.ink900 }}>QAR {me.priceFrom}</strong> · {me.city}</div>
+              </>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {[{label:'Name',key:'name'},{label:'Specialty',key:'specialty'},{label:'City',key:'city'}].map(f => (
+                  <div key={f.key}><label className="text-xs uppercase font-medium block mb-1" style={{ color:T.ink500 }}>{f.label}</label><input value={draft[f.key] || ''} onChange={e => setDraft(d => ({...d, [f.key]: e.target.value}))} className="w-full py-2 px-3 rounded-lg text-sm outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/></div>
+                ))}
+                <div><label className="text-xs uppercase font-medium block mb-1" style={{ color:T.ink500 }}>Bio</label><textarea value={draft.bio || ''} onChange={e => setDraft(d => ({...d, bio: e.target.value}))} rows={4} className="w-full py-2 px-3 rounded-lg text-sm outline-none resize-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/></div>
+                <div><label className="text-xs uppercase font-medium block mb-1" style={{ color:T.ink500 }}>Price from (QAR)</label><input value={draft.priceFrom || ''} onChange={e => setDraft(d => ({...d, priceFrom: e.target.value.replace(/\D/g,'')}))} className="w-full py-2 px-3 rounded-lg text-sm outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/></div>
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2">
+            {!editing ? <Btn size="sm" variant="outline" onClick={() => setEditing(true)}>Edit</Btn>
+              : <><Btn size="sm" variant="outline" onClick={() => setEditing(false)}>Cancel</Btn><Btn size="sm" onClick={save}>Save</Btn></>}
+          </div>
+        </div>
+      </div>
+      <div className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        <h2 className="text-base font-semibold mb-3" style={{ color:T.ink900 }}>Your services</h2>
+        <div className="flex flex-col gap-2">
+          {me.services?.map(s => (
+            <div key={s.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background:T.bgMuted }}>
+              <div><div className="text-sm font-semibold" style={{ color:T.ink900 }}>{s.title}</div><div className="text-xs" style={{ color:T.ink500 }}>{s.duration} min</div></div>
+              <div className="text-sm font-semibold" style={{ color:T.ink900 }}>QAR {s.price}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// ADMIN PAGE (wired to real pending providers)
+// ============================================================
+const AdminPage = () => {
+  const [tab, setTab] = useState('applications');
+  const [applications, setApplications] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const [appsRes, usersRes] = await Promise.all([
+        apiFetch('/api/providers/pending'),
+        apiFetch('/api/users'),
+      ]);
+      if (appsRes.ok) setApplications(await appsRes.json());
+      if (usersRes.ok) setUsers(await usersRes.json());
+    } catch (e) {}
+    setLoading(false);
+  };
+  useEffect(() => { loadData(); }, []);
+
+  const setStatus = async (id, status) => {
+    try {
+      const res = await apiFetch(`/api/providers/${id}/status`, { method:'PUT', body: JSON.stringify({ status }) });
+      if (!res.ok) throw new Error('Failed');
+      showToast(status === 'approved' ? 'Provider approved' : 'Provider rejected', 'success');
+      loadData();
+    } catch (e) { showToast('Action failed', 'error'); }
+  };
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+      <h1 className="text-2xl font-semibold mb-6" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Admin</h1>
+      <div className="flex gap-1 p-1 rounded-xl w-fit mb-6" style={{ background:T.bgMuted }}>
+        {[{id:'applications',label:`Applications (${applications.length})`},{id:'users',label:`Users (${users.length})`}].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} className="px-5 py-2 rounded-lg text-sm font-medium" style={{ background: tab===t.id ? T.bgSurface : 'transparent', color: tab===t.id ? T.ink900 : T.ink500 }}>{t.label}</button>
+        ))}
+      </div>
+      {loading && <div className="text-center py-8" style={{ color:T.ink500 }}>Loading…</div>}
+      {!loading && tab === 'applications' && (
+        <>
+          {applications.length === 0 ? (
+            <div className="rounded-2xl p-12 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+              <Check size={28} className="mx-auto mb-3" style={{ color:T.success }}/>
+              <div className="font-medium" style={{ color:T.ink900 }}>Inbox zero — no pending applications</div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {applications.map(a => (
+                <div key={a.id} className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+                  <div className="flex items-start gap-4">
+                    <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-semibold" style={{ background:T.primary, fontFamily:'Fraunces,serif' }}>{a.name[0]}</div>
+                    <div className="flex-1">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <div className="font-semibold" style={{ color:T.ink900 }}>{a.name}</div>
+                          <div className="text-sm" style={{ color:T.ink500 }}>{a.specialty} · {a.cat}</div>
+                        </div>
+                        <Pill bg={T.accent100} color={T.accent600}>Pending</Pill>
+                      </div>
+                      <p className="mt-2 text-sm" style={{ color:T.ink700 }}>{a.bio}</p>
+                      <div className="mt-2 text-xs" style={{ color:T.ink500 }}>Price from: QAR {a.priceFrom} · {a.residency || 'Residency not specified'}</div>
+                      <div className="mt-3 flex gap-2">
+                        <Btn size="sm" leadingIcon={Check} onClick={() => setStatus(a.id, 'approved')}>Approve</Btn>
+                        <Btn size="sm" variant="outline" leadingIcon={X} onClick={() => setStatus(a.id, 'rejected')}>Reject</Btn>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+      {!loading && tab === 'users' && (
+        <div className="rounded-2xl overflow-hidden" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          {users.length === 0 ? <div className="p-8 text-center text-sm" style={{ color:T.ink500 }}>No registered users yet.</div>
+            : users.map((u, i, arr) => (
+              <div key={u.id} className="flex items-center gap-3 p-4" style={{ borderBottom: i<arr.length-1 ? `1px solid ${T.border}` : 'none' }}>
+                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold" style={{ background:T.primary, fontFamily:'Fraunces,serif' }}>{u.name[0]}</div>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{u.name}</div>
+                  <div className="text-xs" style={{ color:T.ink500 }}>{u.email}</div>
+                </div>
+                <Pill bg={u.role==='provider' ? T.accent100 : T.primary100} color={u.role==='provider' ? T.accent600 : T.primary}>{u.role}</Pill>
+              </div>
+            ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ============================================================
+// TERMS PAGE
+// ============================================================
+const TermsPage = ({ onNavigate }) => {
+  const [openIdx, setOpenIdx] = useState(-1);
+  const sections = [
+    { title:'1. Who we are', body:'toBayt is a digital marketplace operated by toBayt Technologies W.L.L., registered in the State of Qatar. We connect clients with independent service providers.' },
+    { title:'2. Eligibility', body:'You must be at least 18 years old to use toBayt. Providers must supply valid Qatari ID, CR or sponsor NOC, and required specialty licenses.' },
+    { title:'3. Bookings & payments', body:'Cancellations ≥24h before: full refund. 2–24h before: 50% refund. <2h or no-show: no refund. Provider cancellations always result in full client refund.' },
+    { title:'4. Provider obligations', body:'Providers are independent contractors responsible for their own tax, insurance, and Qatari licensing compliance.' },
+    { title:'5. Privacy', body:'We process personal data per Qatar Law No. 13 of 2016 (PDPL). Contact privacy@tobayt.qa to exercise your data rights.' },
+    { title:'6. Governing law', body:'These Terms are governed by the laws of the State of Qatar.' },
+  ];
+  return (
+    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8">
+      <button onClick={() => onNavigate(-1)} className="flex items-center gap-2 text-sm mb-6" style={{ color:T.primary }}><ArrowLeft size={15}/> Back</button>
+      <h1 className="text-2xl font-semibold mb-2" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Terms & Conditions</h1>
+      <p className="text-sm mb-6" style={{ color:T.ink500 }}>Governed by the laws of the State of Qatar.</p>
+      <div className="flex flex-col gap-2">
+        {sections.map((s,i) => (
+          <div key={i} className="rounded-2xl overflow-hidden" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+            <button onClick={() => setOpenIdx(openIdx===i ? -1 : i)} className="w-full flex items-center justify-between p-5 text-left">
+              <span className="font-semibold" style={{ color:T.ink900 }}>{s.title}</span>
+              <ChevronDown size={16} style={{ color:T.ink500, transform: openIdx===i ? 'rotate(180deg)' : 'none', transition:'transform 0.15s' }}/>
+            </button>
+            {openIdx===i && <div className="px-5 pb-5 text-sm leading-relaxed border-t" style={{ borderColor:T.border, color:T.ink700, paddingTop:16 }}>{s.body}</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// APP ROOT
+// ============================================================
+function App() {
+  const [user, setUser] = useState(null);
+  const [viewRole, setViewRole] = useState('admin'); // for admin role switching
+  const [authLoading, setAuthLoading] = useState(true);
+  const [history, setHistory] = useState([{ name:'landing' }]);
+  const [providers, setProviders] = useState([]);
+  const [posts, setPosts] = useState([]);
+  const [bookings, setBookings] = useState([]);
+  const [threads, setThreads] = useState({});
+  const [bookingModal, setBookingModal] = useState(null);
+  const [paymentModal, setPaymentModal] = useState(null);
+  const [rescheduleModal, setRescheduleModal] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const currentRoute = history[history.length - 1];
+  const isAuthed = !!user;
+  const effectiveRole = user?.role === 'admin' ? viewRole : (user?.role || 'client');
+
+  const goto = (name, params = {}) => {
+    if (name === -1) { setHistory(h => h.length > 1 ? h.slice(0,-1) : h); return; }
+    setHistory(h => [...h, { name, ...params }]);
+    window.scrollTo(0, 0);
+  };
+
+  // Auth bootstrap
+  useEffect(() => {
+    const token = getToken();
+    if (!token) { setAuthLoading(false); return; }
+    apiFetch('/api/auth/me')
+      .then(r => r.ok ? r.json() : null)
+      .then(u => {
+        if (u) setUser(u);
+        else clearToken();
+      })
+      .catch(() => clearToken())
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  // Data load
+  const refreshData = useCallback(async () => {
+    try {
+      const [pRes, postRes, bRes] = await Promise.all([
+        apiFetch('/api/providers'),
+        apiFetch('/api/posts'),
+        apiFetch('/api/bookings'),
+      ]);
+      const p = pRes.ok ? await pRes.json() : [];
+      const po = postRes.ok ? await postRes.json() : [];
+      const b = bRes.ok ? await bRes.json() : [];
+      setProviders(p);
+      setPosts(po);
+      setBookings(b);
+      const threadEntries = await Promise.all(b.map(booking =>
+        apiFetch(`/api/threads/${booking.id}`).then(r => r.ok ? r.json() : []).then(msgs => [booking.id, msgs])
+      ));
+      const threadMap = {};
+      threadEntries.forEach(([id, msgs]) => { threadMap[id] = msgs; });
+      setThreads(threadMap);
+    } catch (e) {}
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { refreshData(); }, [user]);
+
+  // Auth handlers
+  const handleAuth = (token, u) => {
+    setToken(token);
+    setUser(u);
+    if (u.role === 'admin') { setViewRole('admin'); goto('admin'); }
+    else if (u.role === 'provider') goto('dashboard');
+    else goto('feed');
+    showToast(`Welcome, ${u.name}!`, 'success');
+  };
+
+  const handleLogout = () => {
+    clearToken();
+    setUser(null);
+    setViewRole('admin');
+    setBookings([]);
+    setThreads({});
+    goto('landing');
+    showToast('Signed out');
+  };
+
+  const requireAuth = (action) => {
+    if (!isAuthed) {
+      showToast('Please log in to continue');
+      goto('login');
+      return false;
+    }
+    action();
+    return true;
+  };
+
+  // Booking handlers
+  const handleBookProvider = (providerId, serviceId) => {
+    requireAuth(() => {
+      const p = providers.find(x => x.id === providerId);
+      if (p) setBookingModal({ provider: p, serviceId });
+    });
+  };
+
+  const handleBookComplete = async (data) => {
+    const provider = bookingModal.provider;
+    const newBooking = {
+      providerId: provider.id,
+      providerName: provider.name, providerCover: provider.cover,
+      serviceTitle: data.service.title, serviceId: data.service.id,
+      date: data.date.toISOString(), slot: data.slot,
+      when: `${fmtDateShort(data.date)} · ${data.slot}`,
+      locType: data.locType,
+      total: data.service.price + (data.locType === 'online' ? 0 : 12),
+      status: 'pending',
+    };
+    try {
+      const res = await apiFetch('/api/bookings', { method:'POST', body: JSON.stringify(newBooking) });
+      const created = await res.json();
+      setBookings(p => [created, ...p]);
+      const tr = await apiFetch(`/api/threads/${created.id}`);
+      if (tr.ok) {
+        const msgs = await tr.json();
+        setThreads(p => ({ ...p, [created.id]: msgs }));
+      }
+    } catch (e) {}
+    setBookingModal(null);
+    showToast('Booking request sent!', 'success');
+    goto('bookings');
+  };
+
+  const handlePay = (id) => setPaymentModal(bookings.find(b => b.id === id));
+  const handlePaymentSuccess = async (method) => {
+    const id = paymentModal?.id;
+    try {
+      await apiFetch(`/api/bookings/${id}`, { method:'PUT', body: JSON.stringify({ status:'confirmed', paymentMethod:method }) });
+    } catch (e) {}
+    setBookings(p => p.map(b => b.id === id ? { ...b, status:'confirmed', paymentMethod:method } : b));
+    setPaymentModal(null);
+    showToast('Payment confirmed!', 'success');
+  };
+
+  const handleCancel = async (id, refund) => {
+    try {
+      await apiFetch(`/api/bookings/${id}`, { method:'PUT', body: JSON.stringify({ status:'cancelled', refundedAmount: refund }) });
+    } catch (e) {}
+    setBookings(p => p.map(b => b.id === id ? { ...b, status:'cancelled' } : b));
+    showToast(`Booking cancelled · QAR ${refund} refund initiated`);
+  };
+
+  const handleRescheduleComplete = async (id, newDate, newSlot) => {
+    const when = `${fmtDateShort(newDate)} · ${newSlot}`;
+    try {
+      await apiFetch(`/api/bookings/${id}`, { method:'PUT', body: JSON.stringify({ date:newDate.toISOString(), slot:newSlot, when }) });
+    } catch (e) {}
+    setBookings(p => p.map(b => b.id === id ? { ...b, date:newDate.toISOString(), slot:newSlot, when } : b));
+    setRescheduleModal(null);
+    showToast('Booking rescheduled!', 'success');
+  };
+
+  const handleSend = async (id, text) => {
+    const msg = { from:'client', text };
+    try {
+      const res = await apiFetch(`/api/threads/${id}`, { method:'POST', body: JSON.stringify(msg) });
+      const created = await res.json();
+      setThreads(p => ({ ...p, [id]: [...(p[id]||[]), created] }));
+    } catch (e) {
+      setThreads(p => ({ ...p, [id]: [...(p[id]||[]), { ...msg, id: Date.now(), time:'Just now' }] }));
+    }
+  };
+
+  const handleMarkRead = async (id) => {
+    try { await apiFetch(`/api/threads/${id}/read`, { method:'POST' }); } catch(e) {}
+    setThreads(p => ({ ...p, [id]: (p[id]||[]).map(m => m.from==='provider' ? {...m, read:true} : m) }));
+  };
+
+  const handleProviderInquiry = (prov) => {
+    requireAuth(() => {
+      const iid = `inquiry-${prov.id}`;
+      if (!bookings.find(b => b.id === iid)) {
+        const inq = { id:iid, providerId:prov.id, providerName:prov.name, providerCover:prov.cover, serviceTitle:'Inquiry · no booking yet', when:'Pre-booking', isInquiry:true };
+        setBookings(p => [inq, ...p]);
+        setThreads(p => ({ ...p, [iid]: [] }));
+      }
+      goto('messages', { bookingId: iid });
+    });
+  };
+
+  const handleProviderUpdate = (updated) => {
+    setProviders(p => p.map(x => x.id === updated.id ? updated : x));
+  };
+
+  // Loading
+  if (authLoading || loading) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center flex-col gap-3" style={{ background:T.bgBase }}>
+        <Logo size={32}/>
+        <div className="flex gap-1.5 mt-2">
+          {[0,1,2].map(i => <div key={i} className="w-2 h-2 rounded-full" style={{ background:T.primary, animation:`pulse 1s ${i*0.2}s infinite` }}/>)}
+        </div>
+        <style>{`@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.3;transform:scale(0.6)} }`}</style>
+      </div>
+    );
+  }
+
+  // Route resolution
+  const provider = useMemo(() => providers.find(p => p.id === currentRoute.providerId), [currentRoute.providerId, providers]);
+
+  let page;
+  const routeName = currentRoute.name;
+
+  // Auth routes (always accessible)
+  if (routeName === 'login') page = <LoginPage onNavigate={goto} onAuth={handleAuth}/>;
+  else if (routeName === 'signup') page = <SignupPage onNavigate={goto} onAuth={handleAuth}/>;
+  else if (routeName === 'landing') page = <LandingPage onNavigate={goto} isAuthed={isAuthed}/>;
+  else if (routeName === 'terms') page = <TermsPage onNavigate={goto}/>;
+  else if (routeName === 'feed') page = <FeedPage providers={providers} posts={posts} onNavigate={goto} onBook={handleBookProvider} onBookCollab={p => requireAuth(() => showToast('Bundle booking requested', 'success'))}/>;
+  else if (routeName === 'explore') page = <ExplorePage providers={providers} initialCat={currentRoute.cat} onNavigate={goto}/>;
+  else if (routeName === 'provider') page = <ProviderPage provider={provider} onNavigate={goto} onBook={(sid) => handleBookProvider(provider.id, sid)} onMessage={handleProviderInquiry}/>;
+  // Protected routes
+  else if (!isAuthed) {
+    page = <div className="pt-8"><AuthGate action={routeName === 'bookings' ? 'manage bookings' : routeName === 'messages' ? 'check messages' : 'continue'} onLogin={() => goto('login')} onSignup={() => goto('signup')}/></div>;
+  }
+  else if (effectiveRole === 'admin' && routeName === 'admin') page = <AdminPage/>;
+  else if (effectiveRole === 'provider') {
+    if (routeName === 'prov-book') page = <ProviderBookingsPage bookings={bookings}/>;
+    else if (routeName === 'prov-wallet') page = <ProviderWalletPage/>;
+    else if (routeName === 'prov-profile') page = <ProviderProfilePage user={user} providers={providers} onProviderUpdate={handleProviderUpdate}/>;
+    else page = <ProviderDashboard user={user} providers={providers}/>;
+  }
+  else {
+    // client
+    if (routeName === 'bookings') page = <BookingsPage bookings={bookings} onNavigate={goto} onPay={handlePay} onCancel={handleCancel} onReschedule={b => setRescheduleModal(b)} providers={providers}/>;
+    else if (routeName === 'messages') page = <MessagesPage bookings={bookings} threads={threads} onSend={handleSend} onMarkRead={handleMarkRead} initialBookingId={currentRoute.bookingId}/>;
+    else if (routeName === 'profile') page = <ProfilePage user={user} onNavigate={goto} onLogout={handleLogout}/>;
+    else page = <FeedPage providers={providers} posts={posts} onNavigate={goto} onBook={handleBookProvider} onBookCollab={p => requireAuth(() => showToast('Bundle booking requested', 'success'))}/>;
+  }
+
+  const showNavbar = !['login','signup'].includes(routeName);
+
+  return (
+    <div className="min-h-screen" style={{ background:T.bgBase }}>
+      {showNavbar && (
+        <Navbar
+          currentPage={routeName}
+          user={user}
+          viewRole={viewRole}
+          onSetViewRole={setViewRole}
+          onNavigate={goto}
+          onLogout={handleLogout}
+          bookings={bookings}
+          threads={threads}
+        />
+      )}
+      <div className={showNavbar ? 'pt-16' : ''}>
+        {page}
+      </div>
+      {bookingModal && <BookingModal provider={bookingModal.provider} initialServiceId={bookingModal.serviceId} onClose={() => setBookingModal(null)} onComplete={handleBookComplete}/>}
+      {paymentModal && <PaymentModal booking={paymentModal} onClose={() => setPaymentModal(null)} onSuccess={handlePaymentSuccess}/>}
+      {rescheduleModal && <RescheduleModal booking={rescheduleModal} providers={providers} onClose={() => setRescheduleModal(null)} onComplete={handleRescheduleComplete}/>}
+      <ToastHost/>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
