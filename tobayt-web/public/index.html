@@ -460,7 +460,7 @@ const Navbar = ({ currentPage, user, viewRole, onSetViewRole, onNavigate, onLogo
                 <div className="text-xs truncate" style={{ color:T.ink500 }}>{user.email}</div>
                 <div className="text-[10px] uppercase tracking-wider mt-1 inline-block px-2 py-0.5 rounded-full" style={{ background:T.primary100, color:T.primary }}>{user.role}</div>
               </div>
-              {effectiveRole === 'client' && <button onClick={() => { onNavigate('profile'); setUserMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-2"><User size={14}/> Profile</button>}
+              {!isAdmin && <button onClick={() => { onNavigate('profile'); setUserMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-2"><User size={14}/> Account &amp; settings</button>}
               <button onClick={() => { setUserMenuOpen(false); onLogout(); }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-2" style={{ color: T.danger }}><LogOut size={14}/> Sign out</button>
             </div>
           )}
@@ -726,36 +726,36 @@ const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
         options: { data: { name: name.trim(), role: 'provider' } }
       });
       if (error) throw error;
-      if (!data.session) {
-        setError('Account created — check your email to confirm, then log in to complete your provider profile.');
-        setSubmitting(false);
-        return;
-      }
+      if (!data.user?.id) throw new Error('Signup failed — no user returned');
       const userId = data.user.id;
+      const hasSession = !!data.session;
 
-      // 2. Upload avatar (optional, non-blocking)
+      // 2. Upload avatar (requires auth session for storage policies)
       let avatarUrl = null;
-      if (avatarFile) {
+      if (avatarFile && hasSession) {
         try { avatarUrl = await uploadToBucket('provider-avatars', avatarFile, userId); }
         catch (e) { console.warn('Avatar upload failed:', e.message); }
       }
 
-      // 3. Upload ID doc (optional, non-blocking)
+      // 3. Upload ID doc (requires auth session)
       let idUrl = null;
-      if (idFile) {
+      if (idFile && hasSession) {
         try { idUrl = await uploadToBucket('id-verification', idFile, userId); }
         catch (e) { console.warn('ID upload failed:', e.message); }
       }
 
-      // 4. Update user_metadata with providerId + avatarUrl so it's in the session
-      await sb.auth.updateUser({ data: { providerId: userId, avatarUrl } });
+      // 4. Stash providerId + avatarUrl in user_metadata (only possible with session)
+      if (hasSession) {
+        try { await sb.auth.updateUser({ data: { providerId: userId, avatarUrl } }); } catch (e) {}
+      }
 
-      // 5. Create provider record in our backend (status=pending until admin approves)
+      // 5. ALWAYS create provider record so admin can see the pending application,
+      //    even if email confirmation is on and the user has no session yet.
       try {
         await apiFetch('/api/providers', {
           method:'POST',
           body: JSON.stringify({
-            userId,
+            userId, email: email.trim(),
             name: name.trim(),
             specialty: specialty.trim(),
             bio: bio.trim(),
@@ -763,11 +763,16 @@ const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
             priceFrom: Number(price),
             residency,
             cover: tones[cat] || 'warm-orange',
-            avatarUrl,
-            idUrl,
+            avatarUrl, idUrl,
           })
         });
       } catch (e) { console.warn('Failed to create provider record:', e); }
+
+      if (!hasSession) {
+        setError('Application submitted! Check your email to confirm, then log in.');
+        setSubmitting(false);
+        return;
+      }
 
       // 6. Logged in — return user
       const u = userFromSession(data.session);
@@ -1618,51 +1623,113 @@ const MessagesPage = ({ bookings, threads, onSend, onMarkRead, initialBookingId 
 // ============================================================
 // PROFILE PAGE
 // ============================================================
-const ProfilePage = ({ user, onNavigate, onLogout }) => (
-  <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 grid md:grid-cols-[240px_1fr] gap-8">
-    <div>
-      <div className="rounded-2xl p-6 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
-        <div className="w-20 h-20 rounded-full mx-auto flex items-center justify-center text-white text-2xl font-medium mb-3" style={{ background:`linear-gradient(135deg,${T.primary},${T.accent})`, fontFamily:'Fraunces,serif' }}>{(user?.name||'?')[0].toUpperCase()}</div>
-        <div className="font-semibold" style={{ color:T.ink900, fontFamily:'Fraunces,serif' }}>{user?.name}</div>
-        <div className="text-xs mt-0.5" style={{ color:T.ink500 }}>{user?.email}</div>
-        <div className="text-[10px] uppercase tracking-wider mt-2 inline-block px-2 py-0.5 rounded-full" style={{ background:T.primary100, color:T.primary }}>{user?.role}</div>
-      </div>
-      <div className="mt-4 rounded-2xl overflow-hidden" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
-        {[
-          {icon:CalendarIcon,label:'My bookings',onClick:()=>onNavigate('bookings')},
-          {icon:MessageSquare,label:'Messages',onClick:()=>onNavigate('messages')},
-          {icon:FileText,label:'Terms',onClick:()=>onNavigate('terms')},
-          {icon:LogOut,label:'Sign out',danger:true,onClick:onLogout},
-        ].map((item,i,arr) => (
-          <button key={i} onClick={item.onClick} className="w-full flex items-center gap-3 p-4 text-left hover:bg-gray-50" style={{ borderBottom: i<arr.length-1 ? `1px solid ${T.border}` : 'none', color: item.danger ? T.danger : T.ink700 }}>
-            <item.icon size={15} style={{ color: item.danger ? T.danger : T.ink500 }}/>
-            <div className="flex-1 text-sm font-medium" style={{ color: item.danger ? T.danger : T.ink900 }}>{item.label}</div>
-            {!item.danger && <ChevronRight size={14} style={{ color:T.ink300 }}/>}
-          </button>
-        ))}
-      </div>
-    </div>
-    <div>
-      <h1 className="text-2xl font-semibold mb-5" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Account overview</h1>
-      <div className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
-        <h2 className="text-base font-semibold mb-4" style={{ color:T.ink900 }}>Quick actions</h2>
-        <div className="grid grid-cols-2 gap-3">
-          {[
-            {label:'Browse experts',icon:Compass,action:()=>onNavigate('explore')},
-            {label:'My bookings',icon:CalendarIcon,action:()=>onNavigate('bookings')},
-            {label:'Messages',icon:MessageSquare,action:()=>onNavigate('messages')},
-            {label:'Discover',icon:Sparkles,action:()=>onNavigate('feed')},
-          ].map((a,i) => (
-            <button key={i} onClick={a.action} className="flex items-center gap-3 p-3 rounded-xl text-left hover:bg-gray-50" style={{ border:`1px solid ${T.border}` }}>
-              <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background:T.primary100 }}><a.icon size={16} style={{ color:T.primary }}/></div>
-              <span className="text-sm font-medium" style={{ color:T.ink900 }}>{a.label}</span>
+const ProfilePage = ({ user, onNavigate, onLogout, onSwitchRole, providers }) => {
+  const [becomeProviderOpen, setBecomeProviderOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const isProvider = user?.role === 'provider';
+  const hasProviderAccount = !!user?.providerId; // true if they've onboarded as provider before
+  const myProvider = hasProviderAccount ? providers?.find(p => p.id === user.providerId) : null;
+
+  const switchTo = async (newRole) => {
+    setSwitching(true);
+    try { await onSwitchRole(newRole); }
+    finally { setSwitching(false); }
+  };
+
+  const clientQuickActions = [
+    {label:'Browse experts',icon:Compass,action:()=>onNavigate('explore')},
+    {label:'My bookings',icon:CalendarIcon,action:()=>onNavigate('bookings')},
+    {label:'Messages',icon:MessageSquare,action:()=>onNavigate('messages')},
+    {label:'Discover',icon:Sparkles,action:()=>onNavigate('feed')},
+  ];
+  const providerQuickActions = [
+    {label:'Dashboard',icon:LayoutDashboard,action:()=>onNavigate('dashboard')},
+    {label:'My bookings',icon:CalendarIcon,action:()=>onNavigate('prov-book')},
+    {label:'Wallet',icon:Wallet,action:()=>onNavigate('prov-wallet')},
+    {label:'My provider profile',icon:User,action:()=>onNavigate('prov-profile')},
+  ];
+  const actions = isProvider ? providerQuickActions : clientQuickActions;
+
+  const sideItems = isProvider
+    ? [
+        {icon:LayoutDashboard,label:'Dashboard',onClick:()=>onNavigate('dashboard')},
+        {icon:CalendarIcon,label:'My bookings',onClick:()=>onNavigate('prov-book')},
+        {icon:User,label:'Provider profile',onClick:()=>onNavigate('prov-profile')},
+        {icon:FileText,label:'Terms',onClick:()=>onNavigate('terms')},
+        {icon:LogOut,label:'Sign out',danger:true,onClick:onLogout},
+      ]
+    : [
+        {icon:CalendarIcon,label:'My bookings',onClick:()=>onNavigate('bookings')},
+        {icon:MessageSquare,label:'Messages',onClick:()=>onNavigate('messages')},
+        {icon:FileText,label:'Terms',onClick:()=>onNavigate('terms')},
+        {icon:LogOut,label:'Sign out',danger:true,onClick:onLogout},
+      ];
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 grid md:grid-cols-[240px_1fr] gap-8">
+      <BecomeProviderModal open={becomeProviderOpen} onClose={() => setBecomeProviderOpen(false)} user={user} onDone={() => onSwitchRole('provider')}/>
+
+      <div>
+        <div className="rounded-2xl p-6 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          {user?.avatarUrl ? (
+            <img src={user.avatarUrl} alt="" className="w-20 h-20 rounded-full mx-auto object-cover mb-3" style={{ border:`2px solid ${T.border}` }}/>
+          ) : (
+            <div className="w-20 h-20 rounded-full mx-auto flex items-center justify-center text-white text-2xl font-medium mb-3" style={{ background:`linear-gradient(135deg,${T.primary},${T.accent})`, fontFamily:'Fraunces,serif' }}>{(user?.name||'?')[0].toUpperCase()}</div>
+          )}
+          <div className="font-semibold" style={{ color:T.ink900, fontFamily:'Fraunces,serif' }}>{user?.name}</div>
+          <div className="text-xs mt-0.5" style={{ color:T.ink500 }}>{user?.email}</div>
+          <div className="text-[10px] uppercase tracking-wider mt-2 inline-block px-2 py-0.5 rounded-full" style={{ background:T.primary100, color:T.primary }}>{user?.role}</div>
+        </div>
+        <div className="mt-4 rounded-2xl overflow-hidden" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          {sideItems.map((item,i,arr) => (
+            <button key={i} onClick={item.onClick} className="w-full flex items-center gap-3 p-4 text-left hover:bg-gray-50" style={{ borderBottom: i<arr.length-1 ? `1px solid ${T.border}` : 'none', color: item.danger ? T.danger : T.ink700 }}>
+              <item.icon size={15} style={{ color: item.danger ? T.danger : T.ink500 }}/>
+              <div className="flex-1 text-sm font-medium" style={{ color: item.danger ? T.danger : T.ink900 }}>{item.label}</div>
+              {!item.danger && <ChevronRight size={14} style={{ color:T.ink300 }}/>}
             </button>
           ))}
         </div>
       </div>
+
+      <div>
+        <h1 className="text-2xl font-semibold mb-5" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>{isProvider ? 'Provider account' : 'Client account'}</h1>
+
+        {/* ROLE SWITCHER */}
+        <div className="rounded-2xl p-5 mb-5" style={{ background:`linear-gradient(135deg,${T.primary100},${T.accent100})`, border:`1px solid ${T.border}` }}>
+          <h2 className="text-base font-semibold mb-1" style={{ color:T.ink900 }}>
+            {isProvider ? 'Switch to client mode' : (hasProviderAccount ? 'Switch back to provider mode' : 'Become a provider')}
+          </h2>
+          <p className="text-sm mb-4" style={{ color:T.ink700 }}>
+            {isProvider
+              ? 'Browse and book sessions from other providers. Your provider profile stays intact and you can switch back any time.'
+              : hasProviderAccount
+                ? `Your provider account (${myProvider?.status === 'pending' ? 'pending review' : 'active'}) is still set up. Switch back to access your dashboard and accept bookings.`
+                : 'Offer your own services on toBayt. Adds a provider profile to your existing account — admin will review before you appear in the feed.'}
+          </p>
+          {isProvider ? (
+            <Btn leadingIcon={User} onClick={() => switchTo('client')} disabled={switching}>{switching ? 'Switching…' : 'Switch to client mode'}</Btn>
+          ) : hasProviderAccount ? (
+            <Btn leadingIcon={Briefcase} variant="secondary" onClick={() => switchTo('provider')} disabled={switching}>{switching ? 'Switching…' : 'Switch to provider mode'}</Btn>
+          ) : (
+            <Btn leadingIcon={Sparkles} variant="secondary" onClick={() => setBecomeProviderOpen(true)}>Become a provider</Btn>
+          )}
+        </div>
+
+        <div className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          <h2 className="text-base font-semibold mb-4" style={{ color:T.ink900 }}>Quick actions</h2>
+          <div className="grid grid-cols-2 gap-3">
+            {actions.map((a,i) => (
+              <button key={i} onClick={a.action} className="flex items-center gap-3 p-3 rounded-xl text-left hover:bg-gray-50" style={{ border:`1px solid ${T.border}` }}>
+                <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background:T.primary100 }}><a.icon size={16} style={{ color:T.primary }}/></div>
+                <span className="text-sm font-medium" style={{ color:T.ink900 }}>{a.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ============================================================
 // PROVIDER DASHBOARD
@@ -1885,7 +1952,10 @@ const AdminPage = () => {
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
-      <h1 className="text-2xl font-semibold mb-6" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Admin</h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-semibold" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Admin</h1>
+        <Btn variant="outline" size="sm" onClick={loadData} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</Btn>
+      </div>
       <div className="flex gap-1 p-1 rounded-xl w-fit mb-6" style={{ background:T.bgMuted }}>
         {[{id:'applications',label:`Applications (${applications.length})`},{id:'users',label:`Users (${users.length})`}].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} className="px-5 py-2 rounded-lg text-sm font-medium" style={{ background: tab===t.id ? T.bgSurface : 'transparent', color: tab===t.id ? T.ink900 : T.ink500 }}>{t.label}</button>
@@ -1976,6 +2046,173 @@ const TermsPage = ({ onNavigate }) => {
         ))}
       </div>
     </div>
+  );
+};
+
+// ============================================================
+// BECOME-A-PROVIDER MODAL (for existing clients upgrading their account)
+// ============================================================
+const BecomeProviderModal = ({ open, onClose, user, onDone }) => {
+  const [step, setStep] = useState(0);
+  const [cat, setCat] = useState('');
+  const [specialty, setSpecialty] = useState('');
+  const [bio, setBio] = useState('');
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState(null);
+  const [price, setPrice] = useState('');
+  const [residency, setResidency] = useState('');
+  const [idFile, setIdFile] = useState(null);
+  const [agreed, setAgreed] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleAvatar = (file) => {
+    setAvatarFile(file);
+    if (file) { const r = new FileReader(); r.onload = () => setAvatarPreview(r.result); r.readAsDataURL(file); }
+    else setAvatarPreview(null);
+  };
+
+  const cats = [{id:'cooking',label:'🍽️ Private Chef / Cooking'},{id:'fitness',label:'💪 Fitness & Personal Training'},{id:'wellness',label:'🥗 Nutrition & Wellness'},{id:'languages',label:'🗣️ Languages & Tutoring'},{id:'beauty',label:'✨ Beauty & Skincare'},{id:'tutoring',label:'📚 Academic Tutoring'}];
+  const stepLabels = ['Category','Profile','Rate','Compliance','Submit'];
+  const canNext = [
+    !!cat,
+    specialty.trim().length >= 2 && bio.trim().length >= 20,
+    !!price && Number(price) > 0,
+    !!residency,
+    agreed,
+  ];
+
+  const submit = async () => {
+    if (!canNext.every(Boolean) || !user?.id || user.id === 'admin-shortcut') return;
+    setError(''); setSubmitting(true);
+    try {
+      const tones = {cooking:'warm-orange',fitness:'deep-teal',wellness:'soft-saffron',languages:'soft-saffron',beauty:'blush',tutoring:'deep-teal'};
+      const userId = user.id;
+
+      // Uploads
+      let avatarUrl = null, idUrl = null;
+      if (avatarFile) {
+        try { avatarUrl = await uploadToBucket('provider-avatars', avatarFile, userId); }
+        catch (e) { console.warn('Avatar upload failed:', e.message); }
+      }
+      if (idFile) {
+        try { idUrl = await uploadToBucket('id-verification', idFile, userId); }
+        catch (e) { console.warn('ID upload failed:', e.message); }
+      }
+
+      // Update user_metadata — change role + record providerId
+      try { await sb.auth.updateUser({ data: { role:'provider', providerId: userId, avatarUrl } }); } catch (e) {}
+
+      // Create the provider record (status=pending until admin approves)
+      await apiFetch('/api/providers', {
+        method:'POST',
+        body: JSON.stringify({
+          userId, email: user.email,
+          name: user.name, specialty: specialty.trim(), bio: bio.trim(),
+          cat, priceFrom: Number(price), residency,
+          cover: tones[cat] || 'warm-orange',
+          avatarUrl, idUrl,
+        })
+      });
+
+      onDone({ providerId: userId, avatarUrl });
+      onClose();
+      setStep(0); setCat(''); setSpecialty(''); setBio(''); setPrice(''); setResidency(''); setAgreed(false); setAvatarFile(null); setAvatarPreview(null); setIdFile(null);
+      showToast('Provider application submitted — admin will review shortly', 'success');
+    } catch (err) { setError(err.message); setSubmitting(false); }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} maxWidth={560}>
+      <div className="p-6">
+        <h2 className="text-xl font-semibold mb-1" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Become a provider</h2>
+        <p className="text-sm mb-5" style={{ color:T.ink500 }}>Add provider services to your existing account. Admin will review within 48h.</p>
+
+        <div className="flex items-center gap-1.5 mb-6">
+          {stepLabels.map((label, i) => (
+            <div key={i} className="flex-1">
+              <div className="h-1 rounded-full mb-1.5" style={{ background: i <= step ? T.accent : T.border }}/>
+              <div className="text-[9px] uppercase tracking-wider font-medium" style={{ color: i === step ? T.accent600 : T.ink500 }}>{label}</div>
+            </div>
+          ))}
+        </div>
+
+        {step === 0 && (
+          <div className="flex flex-col gap-2">
+            <p className="text-sm mb-2" style={{ color:T.ink500 }}>What type of services will you offer?</p>
+            {cats.map(c => (
+              <button key={c.id} onClick={() => setCat(c.id)} className="text-left rounded-xl p-3.5 text-sm font-medium flex items-center justify-between" style={{ background:T.bgSurface, border:`2px solid ${cat===c.id ? T.accent : T.border}`, color: cat===c.id ? T.ink900 : T.ink700 }}>{c.label}{cat===c.id && <Check size={15} style={{ color:T.accent600 }}/>}</button>
+            ))}
+          </div>
+        )}
+        {step === 1 && (
+          <div className="flex flex-col gap-4">
+            <div>
+              <label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Profile photo (optional)</label>
+              <div className="flex items-center gap-3">
+                {avatarPreview ? <img src={avatarPreview} alt="" className="w-16 h-16 rounded-full object-cover" style={{ border:`1px solid ${T.border}` }}/>
+                  : <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{ background:T.bgMuted, border:`1px dashed ${T.border}`, color:T.ink500 }}><Camera size={20}/></div>}
+                <label className="cursor-pointer text-xs font-medium px-3 py-2 rounded-lg" style={{ background:T.primary100, color:T.primary }}>
+                  {avatarFile ? 'Change photo' : 'Upload photo'}
+                  <input type="file" accept="image/*" className="hidden" onChange={e => handleAvatar(e.target.files?.[0] || null)}/>
+                </label>
+                {avatarFile && <button onClick={() => handleAvatar(null)} className="text-xs" style={{ color:T.danger }}>Remove</button>}
+              </div>
+            </div>
+            <div><label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Specialty headline</label><input value={specialty} onChange={e => setSpecialty(e.target.value)} placeholder="e.g. Mediterranean Private Chef" className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/></div>
+            <div>
+              <label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Bio (min 20 chars)</label>
+              <textarea value={bio} onChange={e => setBio(e.target.value)} rows={4} placeholder="Background, experience, what makes your sessions special..." className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none resize-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+              <div className="text-[10px] mt-1 text-right" style={{ color: bio.length<20 ? T.danger : T.ink500 }}>{bio.length} / 20 min</div>
+            </div>
+          </div>
+        )}
+        {step === 2 && (
+          <div className="flex flex-col gap-4">
+            <div><label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Price from (QAR)</label><input value={price} onChange={e => setPrice(e.target.value.replace(/\D/g,''))} placeholder="200" className="w-full py-2.5 px-3.5 rounded-lg text-sm font-mono outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/></div>
+            <div className="rounded-xl p-4" style={{ background:T.primary100 }}>
+              <div className="text-sm font-medium mb-1" style={{ color:T.ink900 }}>toBayt fee: 12%</div>
+              <div className="text-xs" style={{ color:T.ink700 }}>For QAR {price||'200'}/session you'd receive <strong>QAR {Math.round(Number(price||200)*0.88)}</strong>.</div>
+            </div>
+          </div>
+        )}
+        {step === 3 && (
+          <div className="flex flex-col gap-3">
+            <div><label className="text-xs font-medium uppercase tracking-wider mb-2 block" style={{ color:T.ink500 }}>Residency status</label>
+              <div className="flex flex-col gap-1.5">
+                {['Qatari citizen','Resident (self-sponsored / CR holder)','Resident (sponsored — NOC required)','GCC national'].map(r => (
+                  <button key={r} onClick={() => setResidency(r)} className="text-left rounded-xl p-3 text-sm flex items-center justify-between" style={{ background:T.bgSurface, border:`2px solid ${residency===r ? T.primary : T.border}`, color:residency===r ? T.ink900 : T.ink700 }}>{r}{residency===r && <Check size={14} style={{ color:T.primary }}/>}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Qatari ID / CR (optional)</label>
+              <label className="cursor-pointer flex items-center gap-3 p-3 rounded-xl" style={{ background:T.bgMuted, border:`1px dashed ${T.border}` }}>
+                <FileText size={18} style={{ color:T.ink500 }}/>
+                <div className="flex-1"><div className="text-sm font-medium" style={{ color:T.ink900 }}>{idFile ? idFile.name : 'Upload ID or CR'}</div><div className="text-[10px]" style={{ color:T.ink500 }}>PDF, JPG, or PNG</div></div>
+                {idFile && <button type="button" onClick={(e) => { e.preventDefault(); setIdFile(null); }} className="text-xs" style={{ color:T.danger }}>Remove</button>}
+                <input type="file" accept="image/*,application/pdf" className="hidden" onChange={e => setIdFile(e.target.files?.[0] || null)}/>
+              </label>
+            </div>
+          </div>
+        )}
+        {step === 4 && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-2xl p-5" style={{ background:T.bgMuted }}>
+              {[['Category',cats.find(c=>c.id===cat)?.label||cat],['Specialty',specialty],['Starting rate',`QAR ${price}`],['Residency',residency]].map(([k,v]) => (<div key={k} className="flex justify-between text-sm py-1.5"><span style={{ color:T.ink500 }}>{k}</span><span style={{ color:T.ink900, fontWeight:600, textAlign:'right' }}>{v}</span></div>))}
+            </div>
+            <label className="flex items-start gap-3 cursor-pointer"><input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} className="mt-0.5"/><span className="text-sm" style={{ color:T.ink700 }}>I confirm all info is accurate, I agree to the <strong style={{ color:T.primary }}>Provider Terms</strong>, and my account is pending admin approval before becoming bookable.</span></label>
+            {error && <div className="rounded-lg p-3 text-xs flex items-start gap-2" style={{ background:'#FBE2E6', color:'#8B2A38' }}><AlertCircle size={13} style={{ marginTop:1, flexShrink:0 }}/><span>{error}</span></div>}
+          </div>
+        )}
+      </div>
+      <div className="px-6 py-4 flex gap-3 border-t" style={{ borderColor:T.border }}>
+        <Btn variant="outline" onClick={step===0 ? onClose : () => setStep(step-1)} disabled={submitting}>{step===0 ? 'Cancel' : 'Previous'}</Btn>
+        <Btn className="flex-1" disabled={!canNext[step] || submitting} onClick={step===4 ? submit : () => setStep(step+1)} trailingIcon={step===4 ? Check : ArrowRight}>
+          {step===4 ? (submitting ? 'Submitting…' : 'Submit application') : 'Continue'}
+        </Btn>
+      </div>
+    </Modal>
   );
 };
 
@@ -2105,7 +2342,7 @@ function App() {
     return () => { active = false; subscription?.unsubscribe(); };
   }, []);
 
-  // Data load
+  // Data load — includes the current user's own provider record (might be pending)
   const refreshData = useCallback(async () => {
     try {
       const [pRes, postRes, bRes] = await Promise.all([
@@ -2116,7 +2353,20 @@ function App() {
       const p = pRes.ok ? await pRes.json() : [];
       const po = postRes.ok ? await postRes.json() : [];
       const b = bRes.ok ? await bRes.json() : [];
-      setProviders(p);
+
+      // Pull current user's own provider record (could be pending — not in the public list)
+      let merged = p;
+      if (user?.providerId) {
+        try {
+          const mineRes = await apiFetch(`/api/providers/${user.providerId}`);
+          if (mineRes.ok) {
+            const mine = await mineRes.json();
+            if (!merged.find(x => x.id === mine.id)) merged = [mine, ...merged];
+          }
+        } catch (e) {}
+      }
+
+      setProviders(merged);
       setPosts(po);
       setBookings(b);
       const threadEntries = await Promise.all(b.map(booking =>
@@ -2127,9 +2377,9 @@ function App() {
       setThreads(threadMap);
     } catch (e) {}
     setLoading(false);
-  }, []);
+  }, [user]);
 
-  useEffect(() => { refreshData(); }, [user]);
+  useEffect(() => { refreshData(); }, [refreshData]);
 
   // Auth handlers — note new signature: handleAuth(user) only (Supabase manages tokens internally)
   const handleAuth = (u) => {
@@ -2149,6 +2399,27 @@ function App() {
     setThreads({});
     goto('landing');
     showToast('Signed out');
+  };
+
+  // Switch active role on the same Supabase account.
+  // For an existing provider switching to client, we just flip the metadata.
+  // For a client becoming a provider for the first time, BecomeProviderModal already
+  // ran the onboarding + uploads and set providerId — this just flips the role.
+  const handleSwitchRole = async (newRole) => {
+    if (!user || user.id === 'admin-shortcut') return;
+    try {
+      const { data, error } = await sb.auth.updateUser({ data: { role: newRole } });
+      if (error) throw error;
+      // Update local user state immediately (don't wait for the listener)
+      const refreshedSession = await sb.auth.getSession();
+      const u = userFromSession(refreshedSession.data.session) || { ...user, role: newRole };
+      setUser(u);
+      if (newRole === 'provider') goto('dashboard');
+      else goto('feed');
+      showToast(`Switched to ${newRole} mode`, 'success');
+    } catch (e) {
+      showToast(`Failed to switch: ${e.message}`, 'error');
+    }
   };
 
   const requireAuth = (action) => {
@@ -2293,13 +2564,14 @@ function App() {
     if (routeName === 'prov-book') page = <ProviderBookingsPage bookings={bookings}/>;
     else if (routeName === 'prov-wallet') page = <ProviderWalletPage/>;
     else if (routeName === 'prov-profile') page = <ProviderProfilePage user={user} providers={providers} onProviderUpdate={handleProviderUpdate}/>;
+    else if (routeName === 'profile') page = <ProfilePage user={user} onNavigate={goto} onLogout={handleLogout} onSwitchRole={handleSwitchRole} providers={providers}/>;
     else page = <ProviderDashboard user={user} providers={providers} onRefreshPosts={refreshData}/>;
   }
   else {
     // client
     if (routeName === 'bookings') page = <BookingsPage bookings={bookings} onNavigate={goto} onPay={handlePay} onCancel={handleCancel} onReschedule={b => setRescheduleModal(b)} providers={providers}/>;
     else if (routeName === 'messages') page = <MessagesPage bookings={bookings} threads={threads} onSend={handleSend} onMarkRead={handleMarkRead} initialBookingId={currentRoute.bookingId}/>;
-    else if (routeName === 'profile') page = <ProfilePage user={user} onNavigate={goto} onLogout={handleLogout}/>;
+    else if (routeName === 'profile') page = <ProfilePage user={user} onNavigate={goto} onLogout={handleLogout} onSwitchRole={handleSwitchRole} providers={providers}/>;
     else page = <FeedPage providers={providers} posts={posts} onNavigate={goto} onBook={handleBookProvider} onBookCollab={p => requireAuth(() => showToast('Bundle booking requested', 'success'))}/>;
   }
 
