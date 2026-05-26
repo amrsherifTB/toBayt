@@ -12,6 +12,7 @@
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; font-family: Inter, system-ui, sans-serif; background: #FAF7F2; }
@@ -147,20 +148,58 @@ const STATUS_COLORS = {
 };
 
 // ============================================================
-// AUTH STORAGE
+// SUPABASE CLIENT (auth + storage)
 // ============================================================
-const TOKEN_KEY = 'tobayt_token';
-const getToken = () => localStorage.getItem(TOKEN_KEY);
-const setToken = (t) => localStorage.setItem(TOKEN_KEY, t);
-const clearToken = () => localStorage.removeItem(TOKEN_KEY);
-const authHeaders = () => {
-  const t = getToken();
-  return t ? { Authorization: `Bearer ${t}` } : {};
-};
+const SUPABASE_URL = 'https://kbqomjfotufnugdokefh.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_MzeBgqZlMpkKdP_FirdFHg_qCHUPOtI';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, storage: window.localStorage, storageKey: 'tobayt-supabase-auth' },
+});
+
+// Storage helpers
+async function uploadToBucket(bucket, file, folder = '') {
+  if (!file) return null;
+  const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
+  const safeName = `${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+  const path = folder ? `${folder}/${safeName}` : safeName;
+  const { error } = await sb.storage.from(bucket).upload(path, file, { upsert: false, contentType: file.type || undefined });
+  if (error) throw error;
+  const { data } = sb.storage.from(bucket).getPublicUrl(path);
+  return data?.publicUrl || null;
+}
+
+// Admin shortcut (1234/1234) — bypasses Supabase, stored locally
+const ADMIN_KEY = 'tobayt_admin_shortcut';
+const isAdminShortcut = () => localStorage.getItem(ADMIN_KEY) === 'true';
+const setAdminShortcut = (v) => { if (v) localStorage.setItem(ADMIN_KEY, 'true'); else localStorage.removeItem(ADMIN_KEY); };
+
+// Auth-aware fetch — includes Supabase access token (or admin marker) so backend can identify caller
 const apiFetch = async (url, opts = {}) => {
-  const headers = { 'Content-Type':'application/json', ...authHeaders(), ...(opts.headers || {}) };
-  const res = await fetch(url, { ...opts, headers });
-  return res;
+  let auth = {};
+  if (isAdminShortcut()) {
+    auth = { 'X-Admin-Shortcut': '1' };
+  } else {
+    try {
+      const { data: { session } } = await sb.auth.getSession();
+      if (session) auth = { Authorization: `Bearer ${session.access_token}` };
+    } catch (e) {}
+  }
+  const headers = { 'Content-Type':'application/json', ...auth, ...(opts.headers || {}) };
+  return fetch(url, { ...opts, headers });
+};
+
+// Build our local user object from a Supabase session
+const userFromSession = (session) => {
+  if (!session?.user) return null;
+  const m = session.user.user_metadata || {};
+  return {
+    id: session.user.id,
+    email: session.user.email,
+    name: m.name || session.user.email,
+    role: m.role || 'client',
+    providerId: m.providerId || (m.role === 'provider' ? session.user.id : null),
+    avatarUrl: m.avatarUrl || null,
+  };
 };
 
 // ============================================================
@@ -489,16 +528,22 @@ const LoginPage = ({ onNavigate, onAuth }) => {
     e?.preventDefault();
     if (!email.trim() || !password) return;
     setError(''); setSubmitting(true);
+
+    // === Admin shortcut (bypasses Supabase) ===
+    if (email.trim() === '1234' && password === '1234') {
+      setAdminShortcut(true);
+      onAuth({ id:'admin-shortcut', email:'admin@tobayt.qa', name:'Admin', role:'admin', providerId:null });
+      return;
+    }
+
     try {
-      const res = await fetch('/api/auth/login', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ email: email.trim(), password })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Login failed');
-      onAuth(data.token, data.user);
+      const { data, error } = await sb.auth.signInWithPassword({ email: email.trim(), password });
+      if (error) throw error;
+      if (!data.session) throw new Error('Login failed — please confirm your email first.');
+      const u = userFromSession(data.session);
+      onAuth(u);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Login failed');
       setSubmitting(false);
     }
   };
@@ -586,13 +631,18 @@ const ClientSignupForm = ({ onAuth, onNavigate, onBack }) => {
     if (!valid) return;
     setError(''); setSubmitting(true);
     try {
-      const res = await fetch('/api/auth/signup', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), password, role:'client' })
+      const { data, error } = await sb.auth.signUp({
+        email: email.trim(),
+        password,
+        options: { data: { name: name.trim(), role: 'client' } }
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Signup failed');
-      onAuth(data.token, data.user);
+      if (error) throw error;
+      if (!data.session) {
+        setError('Account created — check your email to confirm, then log in.');
+        setSubmitting(false);
+        return;
+      }
+      onAuth(userFromSession(data.session));
     } catch (err) { setError(err.message); setSubmitting(false); }
   };
 
@@ -633,11 +683,23 @@ const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
   const [cat, setCat] = useState('');
   const [specialty, setSpecialty] = useState('');
   const [bio, setBio] = useState('');
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState(null);
   const [price, setPrice] = useState('');
   const [residency, setResidency] = useState('');
+  const [idFile, setIdFile] = useState(null);
   const [agreed, setAgreed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+
+  const handleAvatar = (file) => {
+    setAvatarFile(file);
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => setAvatarPreview(reader.result);
+      reader.readAsDataURL(file);
+    } else { setAvatarPreview(null); }
+  };
 
   const cats = [{id:'cooking',label:'🍽️ Private Chef / Cooking'},{id:'fitness',label:'💪 Fitness & Personal Training'},{id:'wellness',label:'🥗 Nutrition & Wellness'},{id:'languages',label:'🗣️ Languages & Tutoring'},{id:'beauty',label:'✨ Beauty & Skincare'},{id:'tutoring',label:'📚 Academic Tutoring'}];
 
@@ -656,16 +718,60 @@ const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
     setError(''); setSubmitting(true);
     try {
       const tones = {cooking:'warm-orange',fitness:'deep-teal',wellness:'soft-saffron',languages:'soft-saffron',beauty:'blush',tutoring:'deep-teal'};
-      const res = await fetch('/api/auth/signup', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          name: name.trim(), email: email.trim(), password, role:'provider',
-          providerData: { category: cat, specialty: specialty.trim(), bio: bio.trim(), priceFrom: Number(price), residency, cover: tones[cat] || 'warm-orange' }
-        })
+
+      // 1. Create Supabase auth user
+      const { data, error } = await sb.auth.signUp({
+        email: email.trim(),
+        password,
+        options: { data: { name: name.trim(), role: 'provider' } }
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Signup failed');
-      onAuth(data.token, data.user);
+      if (error) throw error;
+      if (!data.session) {
+        setError('Account created — check your email to confirm, then log in to complete your provider profile.');
+        setSubmitting(false);
+        return;
+      }
+      const userId = data.user.id;
+
+      // 2. Upload avatar (optional, non-blocking)
+      let avatarUrl = null;
+      if (avatarFile) {
+        try { avatarUrl = await uploadToBucket('provider-avatars', avatarFile, userId); }
+        catch (e) { console.warn('Avatar upload failed:', e.message); }
+      }
+
+      // 3. Upload ID doc (optional, non-blocking)
+      let idUrl = null;
+      if (idFile) {
+        try { idUrl = await uploadToBucket('id-verification', idFile, userId); }
+        catch (e) { console.warn('ID upload failed:', e.message); }
+      }
+
+      // 4. Update user_metadata with providerId + avatarUrl so it's in the session
+      await sb.auth.updateUser({ data: { providerId: userId, avatarUrl } });
+
+      // 5. Create provider record in our backend (status=pending until admin approves)
+      try {
+        await apiFetch('/api/providers', {
+          method:'POST',
+          body: JSON.stringify({
+            userId,
+            name: name.trim(),
+            specialty: specialty.trim(),
+            bio: bio.trim(),
+            cat,
+            priceFrom: Number(price),
+            residency,
+            cover: tones[cat] || 'warm-orange',
+            avatarUrl,
+            idUrl,
+          })
+        });
+      } catch (e) { console.warn('Failed to create provider record:', e); }
+
+      // 6. Logged in — return user
+      const u = userFromSession(data.session);
+      onAuth({ ...u, providerId: userId, avatarUrl });
     } catch (err) { setError(err.message); setSubmitting(false); }
   };
 
@@ -703,6 +809,21 @@ const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
         )}
         {step === 2 && (
           <div className="flex flex-col gap-4">
+            <div>
+              <label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Profile photo (optional)</label>
+              <div className="flex items-center gap-3">
+                {avatarPreview ? (
+                  <img src={avatarPreview} alt="" className="w-16 h-16 rounded-full object-cover" style={{ border:`1px solid ${T.border}` }}/>
+                ) : (
+                  <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{ background:T.bgMuted, border:`1px dashed ${T.border}`, color:T.ink500 }}><Camera size={20}/></div>
+                )}
+                <label className="cursor-pointer text-xs font-medium px-3 py-2 rounded-lg" style={{ background:T.primary100, color:T.primary }}>
+                  {avatarFile ? 'Change photo' : 'Upload photo'}
+                  <input type="file" accept="image/*" className="hidden" onChange={e => handleAvatar(e.target.files?.[0] || null)}/>
+                </label>
+                {avatarFile && <button onClick={() => handleAvatar(null)} className="text-xs" style={{ color:T.danger }}>Remove</button>}
+              </div>
+            </div>
             <div><label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Specialty headline</label><input value={specialty} onChange={e => setSpecialty(e.target.value)} placeholder="e.g. Mediterranean Private Chef" className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/></div>
             <div>
               <label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Bio (min 20 chars)</label>
@@ -730,6 +851,18 @@ const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
                   <button key={r} onClick={() => setResidency(r)} className="text-left rounded-xl p-3 text-sm flex items-center justify-between" style={{ background:T.bgSurface, border:`2px solid ${residency===r ? T.primary : T.border}`, color:residency===r ? T.ink900 : T.ink700 }}>{r}{residency===r && <Check size={14} style={{ color:T.primary }}/>}</button>
                 ))}
               </div>
+            </div>
+            <div>
+              <label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Qatari ID / CR document (optional, for verification)</label>
+              <label className="cursor-pointer flex items-center gap-3 p-3 rounded-xl" style={{ background:T.bgMuted, border:`1px dashed ${T.border}` }}>
+                <FileText size={18} style={{ color:T.ink500 }}/>
+                <div className="flex-1">
+                  <div className="text-sm font-medium" style={{ color:T.ink900 }}>{idFile ? idFile.name : 'Upload ID or CR'}</div>
+                  <div className="text-[10px]" style={{ color:T.ink500 }}>PDF, JPG, or PNG · stored securely</div>
+                </div>
+                {idFile && <button type="button" onClick={(e) => { e.preventDefault(); setIdFile(null); }} className="text-xs" style={{ color:T.danger }}>Remove</button>}
+                <input type="file" accept="image/*,application/pdf" className="hidden" onChange={e => setIdFile(e.target.files?.[0] || null)}/>
+              </label>
             </div>
             <div className="rounded-xl p-3" style={{ background:'#FBE2E6' }}><p className="text-xs" style={{ color:'#8B2A38' }}>Sponsored residents must hold a valid NOC. Applications without proper documentation will not be approved.</p></div>
           </div>
@@ -1534,12 +1667,17 @@ const ProfilePage = ({ user, onNavigate, onLogout }) => (
 // ============================================================
 // PROVIDER DASHBOARD
 // ============================================================
-const ProviderDashboard = ({ user, providers }) => {
+const ProviderDashboard = ({ user, providers, onRefreshPosts }) => {
   const me = providers.find(p => p.id === user?.providerId) || providers.find(p => p.id === 'p2');
   const isPending = me?.status === 'pending';
+  const [postOpen, setPostOpen] = useState(false);
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
-      <h1 className="text-2xl font-semibold mb-2" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Hi, {me?.name || user?.name}.</h1>
+      <NewPostModal open={postOpen} onClose={() => setPostOpen(false)} user={user} providers={providers} onPosted={onRefreshPosts}/>
+      <div className="flex items-center justify-between mb-2">
+        <h1 className="text-2xl font-semibold" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Hi, {me?.name || user?.name}.</h1>
+        <Btn leadingIcon={Plus} onClick={() => setPostOpen(true)} disabled={isPending}>New post</Btn>
+      </div>
       {isPending && (
         <div className="rounded-xl p-4 mb-6 flex items-start gap-3" style={{ background:T.accent100, border:`1px solid ${T.accent+'33'}` }}>
           <Clock size={18} style={{ color:T.accent600, marginTop:2, flexShrink:0 }}/>
@@ -1629,6 +1767,7 @@ const ProviderProfilePage = ({ user, providers, onProviderUpdate }) => {
   const me = providers.find(p => p.id === user?.providerId) || providers.find(p => p.id === 'p2');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   useEffect(() => { if (me) setDraft({ name: me.name, specialty: me.specialty, bio: me.bio, priceFrom: me.priceFrom, city: me.city }); }, [me?.id]);
   if (!me) return null;
   const save = async () => {
@@ -1641,13 +1780,37 @@ const ProviderProfilePage = ({ user, providers, onProviderUpdate }) => {
       setEditing(false);
     } catch (e) { showToast('Failed to save', 'error'); }
   };
+  const handleAvatarChange = async (file) => {
+    if (!file || !user?.id || user.id === 'admin-shortcut') return;
+    setUploadingAvatar(true);
+    try {
+      const url = await uploadToBucket('provider-avatars', file, user.id);
+      // Save URL to provider record + user metadata
+      const res = await apiFetch(`/api/providers/${me.id}`, { method:'PUT', body: JSON.stringify({ avatarUrl: url }) });
+      if (res.ok) {
+        const updated = await res.json();
+        onProviderUpdate(updated);
+      }
+      try { await sb.auth.updateUser({ data: { avatarUrl: url } }); } catch (e) {}
+      showToast('Photo updated', 'success');
+    } catch (e) { showToast('Upload failed: ' + e.message, 'error'); }
+    setUploadingAvatar(false);
+  };
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
       <div className="rounded-2xl p-6 mb-6" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
         <div className="flex items-start gap-5">
           <div className="relative">
-            <div className="w-20 h-20 rounded-full flex items-center justify-center text-white text-2xl font-semibold" style={{ background:`linear-gradient(135deg,${T.primary},${T.accent})`, fontFamily:'Fraunces,serif' }}>{me.name[0]}</div>
+            {me.avatarUrl ? (
+              <img src={me.avatarUrl} alt={me.name} className="w-20 h-20 rounded-full object-cover" style={{ border:`2px solid ${T.border}` }}/>
+            ) : (
+              <div className="w-20 h-20 rounded-full flex items-center justify-center text-white text-2xl font-semibold" style={{ background:`linear-gradient(135deg,${T.primary},${T.accent})`, fontFamily:'Fraunces,serif' }}>{me.name[0]}</div>
+            )}
             {me.verified && <div className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full flex items-center justify-center" style={{ background:T.bgSurface, border:`2px solid ${T.bgBase}` }}><ShieldCheck size={14} style={{ color:T.primary }}/></div>}
+            <label className="absolute -bottom-1 -left-1 w-7 h-7 rounded-full flex items-center justify-center cursor-pointer" style={{ background:T.primary, color:'#fff', border:`2px solid ${T.bgBase}` }} title="Change photo">
+              {uploadingAvatar ? <Clock size={12}/> : <Camera size={12}/>}
+              <input type="file" accept="image/*" className="hidden" onChange={e => handleAvatarChange(e.target.files?.[0])}/>
+            </label>
           </div>
           <div className="flex-1">
             {!editing ? (
@@ -1817,6 +1980,78 @@ const TermsPage = ({ onNavigate }) => {
 };
 
 // ============================================================
+// NEW POST MODAL (uploads work-proof-posts to Supabase)
+// ============================================================
+const NewPostModal = ({ open, onClose, user, providers, onPosted }) => {
+  const [caption, setCaption] = useState('');
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreview, setPhotoPreview] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const handlePhoto = (file) => {
+    setPhotoFile(file);
+    if (file) {
+      const r = new FileReader(); r.onload = () => setPhotoPreview(r.result); r.readAsDataURL(file);
+    } else setPhotoPreview(null);
+  };
+  const submit = async () => {
+    if (!caption.trim()) return;
+    setSubmitting(true);
+    try {
+      let imageUrl = null;
+      if (photoFile && user?.id && user.id !== 'admin-shortcut') {
+        try { imageUrl = await uploadToBucket('work-proof-posts', photoFile, user.id); }
+        catch (e) { console.warn('Photo upload failed:', e.message); }
+      }
+      const me = providers.find(p => p.id === user?.providerId);
+      await apiFetch('/api/posts', {
+        method:'POST',
+        body: JSON.stringify({
+          providerId: user?.providerId,
+          caption: caption.trim(),
+          imageUrl,
+          coverTone: me?.cover || 'warm-orange',
+          proofKind: 'outcome',
+          proofBadge: 'Just posted',
+        })
+      });
+      showToast('Post published!', 'success');
+      setCaption(''); setPhotoFile(null); setPhotoPreview(null);
+      onPosted?.();
+      onClose();
+    } catch (e) { showToast('Failed to post: ' + e.message, 'error'); }
+    setSubmitting(false);
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="New post" maxWidth={480}>
+      <div className="p-6 flex flex-col gap-4">
+        <label className="cursor-pointer rounded-xl flex flex-col items-center justify-center" style={{ background:T.bgMuted, border:`2px dashed ${T.border}`, aspectRatio:'16/9' }}>
+          {photoPreview ? (
+            <img src={photoPreview} alt="" className="w-full h-full object-cover rounded-xl"/>
+          ) : (
+            <>
+              <Camera size={28} style={{ color:T.ink300 }}/>
+              <div className="text-sm mt-2" style={{ color:T.ink500 }}>Upload work photo</div>
+              <div className="text-xs mt-1" style={{ color:T.ink300 }}>Saved to work-proof-posts bucket</div>
+            </>
+          )}
+          <input type="file" accept="image/*" className="hidden" onChange={e => handlePhoto(e.target.files?.[0] || null)}/>
+        </label>
+        {photoFile && <button onClick={() => handlePhoto(null)} className="text-xs self-start" style={{ color:T.danger }}>Remove photo</button>}
+        <div>
+          <label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Caption</label>
+          <textarea value={caption} onChange={e => setCaption(e.target.value.slice(0,280))} rows={4} placeholder="What did you do in this session? What did the client achieve?" className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none resize-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+          <div className="text-[10px] mt-1 text-right" style={{ color:T.ink500 }}>{caption.length}/280</div>
+        </div>
+        <div className="flex gap-3">
+          <Btn variant="outline" onClick={onClose} className="flex-1">Cancel</Btn>
+          <Btn className="flex-1" disabled={!caption.trim() || submitting} onClick={submit}>{submitting ? 'Publishing…' : 'Publish'}</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+// ============================================================
 // APP ROOT
 // ============================================================
 function App() {
@@ -1843,18 +2078,31 @@ function App() {
     window.scrollTo(0, 0);
   };
 
-  // Auth bootstrap
+  // Auth bootstrap (Supabase session + admin shortcut)
   useEffect(() => {
-    const token = getToken();
-    if (!token) { setAuthLoading(false); return; }
-    apiFetch('/api/auth/me')
-      .then(r => r.ok ? r.json() : null)
-      .then(u => {
-        if (u) setUser(u);
-        else clearToken();
-      })
-      .catch(() => clearToken())
-      .finally(() => setAuthLoading(false));
+    let active = true;
+    (async () => {
+      // 1. Admin shortcut takes priority
+      if (isAdminShortcut()) {
+        if (active) setUser({ id:'admin-shortcut', email:'admin@tobayt.qa', name:'Admin', role:'admin', providerId:null });
+        if (active) setAuthLoading(false);
+        return;
+      }
+      // 2. Try restoring Supabase session
+      try {
+        const { data: { session } } = await sb.auth.getSession();
+        if (session && active) setUser(userFromSession(session));
+      } catch (e) {}
+      if (active) setAuthLoading(false);
+    })();
+
+    // 3. React to auth state changes (logout from another tab, token refresh, etc.)
+    const { data: { subscription } } = sb.auth.onAuthStateChange((event, session) => {
+      if (isAdminShortcut()) return; // admin shortcut wins
+      if (event === 'SIGNED_OUT') setUser(null);
+      else if (session) setUser(userFromSession(session));
+    });
+    return () => { active = false; subscription?.unsubscribe(); };
   }, []);
 
   // Data load
@@ -1883,9 +2131,8 @@ function App() {
 
   useEffect(() => { refreshData(); }, [user]);
 
-  // Auth handlers
-  const handleAuth = (token, u) => {
-    setToken(token);
+  // Auth handlers — note new signature: handleAuth(user) only (Supabase manages tokens internally)
+  const handleAuth = (u) => {
     setUser(u);
     if (u.role === 'admin') { setViewRole('admin'); goto('admin'); }
     else if (u.role === 'provider') goto('dashboard');
@@ -1893,8 +2140,9 @@ function App() {
     showToast(`Welcome, ${u.name}!`, 'success');
   };
 
-  const handleLogout = () => {
-    clearToken();
+  const handleLogout = async () => {
+    setAdminShortcut(false);
+    try { await sb.auth.signOut(); } catch (e) {}
     setUser(null);
     setViewRole('admin');
     setBookings([]);
@@ -2045,7 +2293,7 @@ function App() {
     if (routeName === 'prov-book') page = <ProviderBookingsPage bookings={bookings}/>;
     else if (routeName === 'prov-wallet') page = <ProviderWalletPage/>;
     else if (routeName === 'prov-profile') page = <ProviderProfilePage user={user} providers={providers} onProviderUpdate={handleProviderUpdate}/>;
-    else page = <ProviderDashboard user={user} providers={providers}/>;
+    else page = <ProviderDashboard user={user} providers={providers} onRefreshPosts={refreshData}/>;
   }
   else {
     // client

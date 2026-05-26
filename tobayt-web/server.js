@@ -1,23 +1,27 @@
+// toBayt server — auth is handled by Supabase on the frontend.
+// This server only stores domain data (providers, posts, bookings, threads) in a JSON file.
+//
+// NOTE: there are no auth checks here. The X-Admin-Shortcut header or a Supabase
+// access token may be sent by the client for tracing, but the server simply trusts
+// the caller. Add proper auth before going to production.
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'tobayt-dev-secret-change-this-in-production-please';
 const DB_PATH = path.join(__dirname, 'data.json');
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// =====================================================================
-// SEED DATA — used on first run / when DB is empty
-// =====================================================================
+// ============================================================
+// SEED DATA
+// ============================================================
 const SEED_PROVIDERS = [
   { id:"p1", name:"Layla", specialty:"Private Chef", cat:"cooking", rating:4.9, reviews:124, priceFrom:280, city:"Doha", distance:3.2, verified:true, bio:"Mediterranean & Levantine cuisine. 12 years cooking for Doha families. I bring everything — ingredients, plates, the magic.", cover:"warm-orange", status:"approved", services:[{id:"s1",title:"Family Dinner (4–6 ppl)",duration:180,price:480,locType:"client_home"},{id:"s2",title:"Cooking Class — Mezze",duration:120,price:280,locType:"both"},{id:"s3",title:"Weekly Meal Prep",duration:240,price:620,locType:"client_home"}] },
   { id:"p2", name:"Khalid", specialty:"Fitness Coach", cat:"fitness", rating:4.8, reviews:89, priceFrom:150, city:"Doha", distance:1.8, verified:true, bio:"Strength and conditioning. Former national team. I'll meet you at your gym, your living room, or my studio in West Bay.", cover:"deep-teal", status:"approved", services:[{id:"s4",title:"1-on-1 Strength Session",duration:60,price:180,locType:"both"},{id:"s5",title:"12-week Transformation",duration:60,price:150,locType:"both"}] },
@@ -29,7 +33,7 @@ const SEED_PROVIDERS = [
 
 const SEED_POSTS = [
   { id:"post1", providerId:"p1", proofKind:"outcome", serviceTitle:"Family Dinner (4–6 ppl)", caption:"Family dinner for the Al-Mansouri table tonight. Lamb ouzi, three salads, knafeh. Booked 9 days in advance, finished on schedule.", likes:234, time:"2h", coverTone:"warm-orange", proofBadge:"Verified booking" },
-  { id:"post2", providerId:"p2", proofKind:"collab", caption:"Bundled service with Nour: one strength session plus one nutrition consultation. Same week, one payment. Built for clients who don't want to coordinate two providers themselves.", likes:412, time:"5h", coverTone:"deep-teal", isCollab:true, collabPartnerId:"p7", collab:{ title:"Train + Eat — Joint Coaching Bundle", description:"1 strength session with Khalid + 1 nutrition consultation with Nour. Booked together, paid once.", regularPrice:420, bundlePrice:350, duration:"2 sessions · 60 min each" } },
+  { id:"post2", providerId:"p2", proofKind:"collab", caption:"Bundled service with Nour: one strength session plus one nutrition consultation. Same week, one payment.", likes:412, time:"5h", coverTone:"deep-teal", isCollab:true, collabPartnerId:"p7", collab:{ title:"Train + Eat — Joint Coaching Bundle", description:"1 strength session with Khalid + 1 nutrition consultation with Nour. Booked together, paid once.", regularPrice:420, bundlePrice:350, duration:"2 sessions · 60 min each" } },
   { id:"post3", providerId:"p3", proofKind:"outcome", serviceTitle:"Kids Arabic Reading", caption:"Six weeks in with one of my younger students. Parents wanted reading fluency before school starts in September — we're on track.", likes:87, time:"1d", coverTone:"soft-saffron", proofBadge:"Verified booking" },
   { id:"post4", providerId:"p2", proofKind:"outcome", serviceTitle:"12-week Transformation", caption:"Twelve weeks of work with a client who couldn't do an unassisted pull-up in week one. Patient consistency over hero workouts.", likes:198, time:"2d", coverTone:"deep-teal", proofBadge:"Verified booking" },
 ];
@@ -45,7 +49,6 @@ const SEED_THREADS = {
     { id:uuidv4(), system:true, icon:"calendar", text:"Booking confirmed by Layla", time:"3 days ago" },
     { id:uuidv4(), from:"provider", text:"Looking forward to it. Any allergies or strong preferences I should plan around?", time:"3 days ago", read:true },
     { id:uuidv4(), from:"client", text:"Nothing serious — my husband doesn't love eggplant but everyone else is fine. Aim for 6 people.", time:"3 days ago" },
-    { id:uuidv4(), from:"provider", text:"Got it. I'll plan a mezze spread, no eggplant. I'll arrive 90 min before with everything I need.", time:"2 days ago", read:true },
     { id:uuidv4(), from:"provider", text:"Quick check — is parking available at The Pearl? And is there an oven I can use?", time:"12 min ago", read:false },
   ],
   b2: [
@@ -60,11 +63,10 @@ const SEED_THREADS = {
   ],
 };
 
-// =====================================================================
-// DB (JSON file persistence)
-// =====================================================================
+// ============================================================
+// JSON FILE PERSISTENCE
+// ============================================================
 let db = {
-  users: [],
   providers: SEED_PROVIDERS.slice(),
   posts: SEED_POSTS.slice(),
   bookings: SEED_BOOKINGS.slice(),
@@ -76,19 +78,13 @@ function loadDb() {
     if (fs.existsSync(DB_PATH)) {
       const raw = fs.readFileSync(DB_PATH, 'utf8');
       const data = JSON.parse(raw);
-      db.users = data.users || [];
       db.providers = (data.providers && data.providers.length) ? data.providers : SEED_PROVIDERS.slice();
       db.posts = (data.posts && data.posts.length) ? data.posts : SEED_POSTS.slice();
       db.bookings = data.bookings || SEED_BOOKINGS.slice();
       db.threads = data.threads || JSON.parse(JSON.stringify(SEED_THREADS));
-      console.log(`📂 Loaded data.json — ${db.users.length} users, ${db.providers.length} providers, ${db.bookings.length} bookings`);
-    } else {
-      saveDb();
-      console.log('📂 Created data.json with seed data');
-    }
-  } catch(e) {
-    console.error('⚠ Failed to load data.json:', e.message);
-  }
+      console.log(`📂 Loaded data.json — ${db.providers.length} providers, ${db.bookings.length} bookings`);
+    } else { saveDb(); console.log('📂 Created data.json with seed data'); }
+  } catch(e) { console.error('⚠ Failed to load data.json:', e.message); }
 }
 
 let saveTimer = null;
@@ -102,140 +98,32 @@ function saveDb() {
 
 loadDb();
 
-const categories = [
-  { id:"cooking", label:"Cooking" }, { id:"fitness", label:"Fitness" },
-  { id:"wellness", label:"Wellness" }, { id:"languages", label:"Languages" },
-  { id:"beauty", label:"Beauty" }, { id:"tutoring", label:"Tutoring" },
-];
-
-// =====================================================================
-// AUTH MIDDLEWARE
-// =====================================================================
-function authMiddleware(req, res, next) {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) return res.status(401).json({ error: 'Authentication required' });
-  try {
-    req.user = jwt.verify(header.slice(7), JWT_SECRET);
-    next();
-  } catch (e) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
+// ============================================================
+// CALLER IDENTITY (best-effort, no verification)
+// ============================================================
+function callerInfo(req) {
+  const isAdmin = req.headers['x-admin-shortcut'] === '1';
+  // We don't verify Supabase JWTs here — the frontend handles auth.
+  // If you want to verify, decode the payload (NOT for security, only for caller ID):
+  let userId = null;
+  const auth = req.headers.authorization;
+  if (auth && auth.startsWith('Bearer ')) {
+    try {
+      const payload = JSON.parse(Buffer.from(auth.slice(7).split('.')[1], 'base64').toString('utf8'));
+      userId = payload?.sub || null;
+    } catch (e) {}
   }
+  return { isAdmin, userId };
 }
 
-function adminOnly(req, res, next) {
-  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
-  next();
-}
-
-function optionalAuth(req, res, next) {
-  const header = req.headers.authorization;
-  if (header && header.startsWith('Bearer ')) {
-    try { req.user = jwt.verify(header.slice(7), JWT_SECRET); } catch(e) {}
-  }
-  next();
-}
-
-function sanitizeUser(u) {
-  if (!u) return null;
-  return { id: u.id, email: u.email, name: u.name, role: u.role, providerId: u.providerId || null, createdAt: u.createdAt };
-}
-
-// =====================================================================
-// AUTH ROUTES
-// =====================================================================
-app.post('/api/auth/signup', async (req, res) => {
-  try {
-    const { email, password, name, role, providerData } = req.body || {};
-    if (!email || !password || !name || !role) return res.status(400).json({ error: 'Missing required fields' });
-    if (!['client', 'provider'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
-    if (password.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
-    const cleanEmail = String(email).trim().toLowerCase();
-    if (cleanEmail === '1234') return res.status(400).json({ error: 'This email is reserved' });
-    if (db.users.find(u => u.email === cleanEmail)) return res.status(409).json({ error: 'An account with this email already exists' });
-
-    const passwordHash = await bcrypt.hash(password, 10);
-    const userId = uuidv4();
-    let providerId = null;
-
-    if (role === 'provider') {
-      providerId = `p-${userId.slice(0, 8)}`;
-      const pd = providerData || {};
-      db.providers.push({
-        id: providerId,
-        name: (pd.displayName || name).trim(),
-        specialty: (pd.specialty || '').trim() || 'Service Provider',
-        cat: pd.category || 'wellness',
-        rating: 0, reviews: 0,
-        priceFrom: Number(pd.priceFrom) || 100,
-        city: 'Doha', distance: 5,
-        verified: false,
-        bio: (pd.bio || '').trim(),
-        cover: pd.cover || 'warm-orange',
-        services: Array.isArray(pd.services) && pd.services.length ? pd.services : [
-          { id: `s-${uuidv4().slice(0,8)}`, title: `${(pd.specialty || 'Session').trim()} — 60min`, duration: 60, price: Number(pd.priceFrom) || 100, locType: 'both' }
-        ],
-        status: 'pending',
-        residency: pd.residency || '',
-        userId,
-        createdAt: new Date().toISOString(),
-      });
-    }
-
-    const user = { id: userId, email: cleanEmail, passwordHash, name: name.trim(), role, providerId, createdAt: new Date().toISOString() };
-    db.users.push(user);
-    saveDb();
-
-    const token = jwt.sign({ id: userId, email: cleanEmail, role, providerId }, JWT_SECRET, { expiresIn: '30d' });
-    res.status(201).json({ token, user: sanitizeUser(user) });
-  } catch (e) {
-    console.error('Signup error:', e);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body || {};
-    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-
-    // === ADMIN BACKDOOR ===
-    // email "1234" + password "1234" → instant admin access, no DB account needed.
-    if (String(email).trim() === '1234' && String(password) === '1234') {
-      const adminUser = { id: 'admin-shortcut', email: 'admin@tobayt.qa', name: 'Admin', role: 'admin', providerId: null };
-      const token = jwt.sign(adminUser, JWT_SECRET, { expiresIn: '30d' });
-      return res.json({ token, user: adminUser });
-    }
-
-    const cleanEmail = String(email).trim().toLowerCase();
-    const user = db.users.find(u => u.email === cleanEmail);
-    if (!user) return res.status(401).json({ error: 'Invalid email or password' });
-    const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) return res.status(401).json({ error: 'Invalid email or password' });
-
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role, providerId: user.providerId }, JWT_SECRET, { expiresIn: '30d' });
-    res.json({ token, user: sanitizeUser(user) });
-  } catch (e) {
-    console.error('Login error:', e);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.get('/api/auth/me', authMiddleware, (req, res) => {
-  if (req.user.id === 'admin-shortcut') {
-    return res.json({ id: 'admin-shortcut', email: 'admin@tobayt.qa', name: 'Admin', role: 'admin', providerId: null });
-  }
-  const user = db.users.find(u => u.id === req.user.id);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json(sanitizeUser(user));
-});
-
-// =====================================================================
+// ============================================================
 // PROVIDERS
-// =====================================================================
-app.get('/api/providers', optionalAuth, (req, res) => {
+// ============================================================
+app.get('/api/providers', (req, res) => {
   const { cat, q, verified, maxPrice, maxDistance, minRating, sort, includePending } = req.query;
+  const { isAdmin } = callerInfo(req);
   let result = db.providers.slice();
-  if (req.user?.role !== 'admin' || includePending !== 'true') {
+  if (!isAdmin || includePending !== 'true') {
     result = result.filter(p => (p.status || 'approved') === 'approved');
   }
   if (cat && cat !== 'all') result = result.filter(p => p.cat === cat);
@@ -252,15 +140,17 @@ app.get('/api/providers', optionalAuth, (req, res) => {
   res.json(result);
 });
 
-app.get('/api/providers/pending', authMiddleware, adminOnly, (req, res) => {
+// Admin-only — list pending applications
+app.get('/api/providers/pending', (req, res) => {
   res.json(db.providers.filter(p => p.status === 'pending'));
 });
 
-app.put('/api/providers/:id/status', authMiddleware, adminOnly, (req, res) => {
+// Admin — approve/reject
+app.put('/api/providers/:id/status', (req, res) => {
   const { status } = req.body || {};
-  if (!['approved', 'rejected', 'pending'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  if (!['approved','rejected','pending'].includes(status)) return res.status(400).json({ error:'Invalid status' });
   const idx = db.providers.findIndex(p => p.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Provider not found' });
+  if (idx === -1) return res.status(404).json({ error:'Provider not found' });
   db.providers[idx].status = status;
   if (status === 'approved') db.providers[idx].verified = true;
   saveDb();
@@ -269,61 +159,102 @@ app.put('/api/providers/:id/status', authMiddleware, adminOnly, (req, res) => {
 
 app.get('/api/providers/:id', (req, res) => {
   const provider = db.providers.find(p => p.id === req.params.id);
-  if (!provider) return res.status(404).json({ error: 'Provider not found' });
+  if (!provider) return res.status(404).json({ error:'Provider not found' });
   res.json(provider);
 });
 
-app.put('/api/providers/:id', authMiddleware, (req, res) => {
-  const idx = db.providers.findIndex(p => p.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Provider not found' });
-  const provider = db.providers[idx];
-  if (req.user.role !== 'admin' && provider.userId !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
-  const allowed = ['name', 'specialty', 'bio', 'city', 'priceFrom', 'cat', 'cover', 'services'];
-  for (const k of allowed) if (k in req.body) provider[k] = req.body[k];
-  db.providers[idx] = provider;
+// Provider self-update OR create on signup (uses userId from request body)
+app.post('/api/providers', (req, res) => {
+  const b = req.body || {};
+  if (!b.userId || !b.name) return res.status(400).json({ error:'userId and name are required' });
+  // If a provider with this userId already exists, replace it
+  const existing = db.providers.findIndex(p => p.userId === b.userId);
+  const id = existing >= 0 ? db.providers[existing].id : b.userId;
+  const provider = {
+    id,
+    userId: b.userId,
+    name: b.name,
+    specialty: b.specialty || 'Service Provider',
+    cat: b.cat || 'wellness',
+    rating: 0,
+    reviews: 0,
+    priceFrom: Number(b.priceFrom) || 100,
+    city: b.city || 'Doha',
+    distance: 5,
+    verified: false,
+    bio: b.bio || '',
+    cover: b.cover || 'warm-orange',
+    avatarUrl: b.avatarUrl || null,
+    idUrl: b.idUrl || null,
+    residency: b.residency || '',
+    services: Array.isArray(b.services) && b.services.length ? b.services : [
+      { id:`s-${uuidv4().slice(0,8)}`, title:`${b.specialty || 'Session'} — 60min`, duration:60, price:Number(b.priceFrom) || 100, locType:'both' }
+    ],
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+  if (existing >= 0) db.providers[existing] = { ...db.providers[existing], ...provider };
+  else db.providers.push(provider);
   saveDb();
-  res.json(provider);
+  res.status(201).json(provider);
 });
 
-// =====================================================================
+app.put('/api/providers/:id', (req, res) => {
+  const idx = db.providers.findIndex(p => p.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error:'Provider not found' });
+  const allowed = ['name','specialty','bio','city','priceFrom','cat','cover','services','avatarUrl'];
+  for (const k of allowed) if (k in req.body) db.providers[idx][k] = req.body[k];
+  saveDb();
+  res.json(db.providers[idx]);
+});
+
+// ============================================================
 // POSTS
-// =====================================================================
+// ============================================================
 app.get('/api/posts', (req, res) => res.json(db.posts));
 
-app.post('/api/posts', authMiddleware, (req, res) => {
-  if (req.user.role !== 'provider' && req.user.role !== 'admin') return res.status(403).json({ error: 'Provider account required' });
-  const provider = db.providers.find(p => p.id === req.user.providerId);
+app.post('/api/posts', (req, res) => {
+  const b = req.body || {};
+  const provider = db.providers.find(p => p.id === b.providerId);
   const post = {
     id: `post-${uuidv4().slice(0,8)}`,
-    providerId: req.user.providerId,
-    caption: req.body.caption || '',
-    serviceTitle: req.body.serviceTitle || '',
-    likes: 0, time: 'Just now',
-    coverTone: provider?.cover || 'warm-orange',
-    proofBadge: 'Just posted',
-    proofKind: 'outcome',
+    providerId: b.providerId,
+    caption: b.caption || '',
+    serviceTitle: b.serviceTitle || '',
+    imageUrl: b.imageUrl || null,
+    likes: 0,
+    time: 'Just now',
+    coverTone: b.coverTone || provider?.cover || 'warm-orange',
+    proofBadge: b.proofBadge || 'Just posted',
+    proofKind: b.proofKind || 'outcome',
   };
   db.posts.unshift(post);
   saveDb();
   res.status(201).json(post);
 });
 
-// =====================================================================
+// ============================================================
 // CATEGORIES
-// =====================================================================
-app.get('/api/categories', (req, res) => res.json(categories));
+// ============================================================
+app.get('/api/categories', (req, res) => res.json([
+  { id:"cooking", label:"Cooking" }, { id:"fitness", label:"Fitness" },
+  { id:"wellness", label:"Wellness" }, { id:"languages", label:"Languages" },
+  { id:"beauty", label:"Beauty" }, { id:"tutoring", label:"Tutoring" },
+]));
 
-// =====================================================================
+// ============================================================
 // BOOKINGS
-// =====================================================================
-app.get('/api/bookings', optionalAuth, (req, res) => {
-  if (!req.user || req.user.role === 'admin') return res.json(db.bookings);
-  if (req.user.role === 'provider') return res.json(db.bookings.filter(b => b.providerId === req.user.providerId));
-  return res.json(db.bookings.filter(b => b.userId === req.user.id || b.userId === null));
+// ============================================================
+app.get('/api/bookings', (req, res) => {
+  const { isAdmin, userId } = callerInfo(req);
+  if (isAdmin || !userId) return res.json(db.bookings);
+  // Real user: their bookings + provider records where they're the provider
+  res.json(db.bookings.filter(b => b.userId === userId || b.providerId === userId));
 });
 
-app.post('/api/bookings', optionalAuth, (req, res) => {
-  const booking = { id: uuidv4(), ...req.body, userId: req.user?.id || null, createdAt: new Date().toISOString() };
+app.post('/api/bookings', (req, res) => {
+  const { userId } = callerInfo(req);
+  const booking = { id: uuidv4(), ...req.body, userId: userId || req.body.userId || null, createdAt: new Date().toISOString() };
   db.bookings.unshift(booking);
   db.threads[booking.id] = [
     { id: uuidv4(), system: true, icon: 'calendar', text: `Booking request sent to ${booking.providerName}`, time: 'Just now' },
@@ -332,7 +263,7 @@ app.post('/api/bookings', optionalAuth, (req, res) => {
   res.status(201).json(booking);
 });
 
-app.put('/api/bookings/:id', optionalAuth, (req, res) => {
+app.put('/api/bookings/:id', (req, res) => {
   const idx = db.bookings.findIndex(b => b.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Not found' });
   db.bookings[idx] = { ...db.bookings[idx], ...req.body };
@@ -340,14 +271,14 @@ app.put('/api/bookings/:id', optionalAuth, (req, res) => {
   res.json(db.bookings[idx]);
 });
 
-// =====================================================================
+// ============================================================
 // THREADS
-// =====================================================================
+// ============================================================
 app.get('/api/threads/:bookingId', (req, res) => {
   res.json(db.threads[req.params.bookingId] || []);
 });
 
-app.post('/api/threads/:bookingId', optionalAuth, (req, res) => {
+app.post('/api/threads/:bookingId', (req, res) => {
   const { bookingId } = req.params;
   if (!db.threads[bookingId]) db.threads[bookingId] = [];
   const msg = { id: uuidv4(), ...req.body, time: 'Just now' };
@@ -368,21 +299,27 @@ app.post('/api/threads/:bookingId/read', (req, res) => {
   res.json({ ok: true });
 });
 
-// =====================================================================
-// USERS (admin only)
-// =====================================================================
-app.get('/api/users', authMiddleware, adminOnly, (req, res) => {
-  res.json(db.users.map(sanitizeUser));
+// ============================================================
+// USERS (admin demo only — no real list since users live in Supabase)
+// ============================================================
+app.get('/api/users', (req, res) => {
+  // Backend doesn't store users anymore — they're in Supabase Auth.
+  // We can derive a list from provider records.
+  const providerUsers = db.providers.filter(p => p.userId).map(p => ({
+    id: p.userId, email: '(see Supabase)', name: p.name, role: 'provider', providerId: p.id,
+  }));
+  res.json(providerUsers);
 });
 
-// =====================================================================
+// ============================================================
 // CATCH-ALL — serve index.html for client-side routing
-// =====================================================================
+// ============================================================
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.listen(PORT, () => {
   console.log(`\n🏠 toBayt server running at http://localhost:${PORT}`);
-  console.log(`   Admin shortcut: email "1234"  password "1234"\n`);
+  console.log(`   Auth: Supabase (frontend)`);
+  console.log(`   Admin shortcut: email "1234" password "1234"\n`);
 });
