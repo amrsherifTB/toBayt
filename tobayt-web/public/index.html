@@ -1830,39 +1830,80 @@ const ProviderWalletPage = () => (
 // ============================================================
 // PROVIDER PROFILE (provider's own profile editor)
 // ============================================================
-const ProviderProfilePage = ({ user, providers, onProviderUpdate }) => {
-  const me = providers.find(p => p.id === user?.providerId) || providers.find(p => p.id === 'p2');
+const ProviderProfilePage = ({ user, providers, onProviderUpdate, onNavigate }) => {
+  // Decide which provider record to display:
+  // 1. Logged-in real provider → their own record (lookup by id OR userId)
+  // 2. Admin viewing as provider (no providerId) → demo provider p2 (Khalid)
+  // 3. Nothing found yet → fall back to user object so we still show something useful
+  const lookupId = user?.providerId || (user?.role === 'admin' ? 'p2' : null);
+  const [fetched, setFetched] = useState(null);
+  const [fetchError, setFetchError] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+
+  // Try the cached list first, then fall back to a direct GET (handles pending providers)
+  const cached = lookupId ? providers.find(p => p.id === lookupId || p.userId === lookupId) : null;
+  const me = cached || fetched;
+
+  useEffect(() => {
+    if (cached || !lookupId) return;
+    setFetchError(false);
+    apiFetch(`/api/providers/${lookupId}`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('not found')))
+      .then(p => setFetched(p))
+      .catch(() => setFetchError(true));
+  }, [lookupId, cached?.id]);
+
   useEffect(() => { if (me) setDraft({ name: me.name, specialty: me.specialty, bio: me.bio, priceFrom: me.priceFrom, city: me.city }); }, [me?.id]);
-  if (!me) return null;
+
   const save = async () => {
+    if (!me) return;
     try {
       const res = await apiFetch(`/api/providers/${me.id}`, { method:'PUT', body: JSON.stringify({ ...draft, priceFrom: Number(draft.priceFrom) }) });
       if (!res.ok) throw new Error('Failed');
       const updated = await res.json();
       onProviderUpdate(updated);
+      setFetched(updated);
       showToast('Profile updated', 'success');
       setEditing(false);
     } catch (e) { showToast('Failed to save', 'error'); }
   };
   const handleAvatarChange = async (file) => {
-    if (!file || !user?.id || user.id === 'admin-shortcut') return;
+    if (!file || !user?.id || user.id === 'admin-shortcut' || !me) return;
     setUploadingAvatar(true);
     try {
       const url = await uploadToBucket('provider-avatars', file, user.id);
-      // Save URL to provider record + user metadata
       const res = await apiFetch(`/api/providers/${me.id}`, { method:'PUT', body: JSON.stringify({ avatarUrl: url }) });
       if (res.ok) {
         const updated = await res.json();
         onProviderUpdate(updated);
+        setFetched(updated);
       }
       try { await sb.auth.updateUser({ data: { avatarUrl: url } }); } catch (e) {}
       showToast('Photo updated', 'success');
     } catch (e) { showToast('Upload failed: ' + e.message, 'error'); }
     setUploadingAvatar(false);
   };
+
+  // ===== Empty state: no provider record found =====
+  if (!me) {
+    if (lookupId && !fetchError) {
+      // still loading
+      return <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12 text-center text-sm" style={{ color: T.ink500 }}>Loading provider profile…</div>;
+    }
+    return (
+      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-12">
+        <div className="rounded-2xl p-8 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          <Briefcase size={28} className="mx-auto mb-3" style={{ color:T.accent }}/>
+          <h2 className="text-lg font-semibold mb-1" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>No provider profile yet</h2>
+          <p className="text-sm mb-5" style={{ color:T.ink500 }}>You're signed in as <strong>{user?.name}</strong> ({user?.email}). To list services on toBayt, set up a provider profile.</p>
+          <Btn leadingIcon={Sparkles} variant="secondary" onClick={() => onNavigate && onNavigate('profile')}>Go to Account & settings</Btn>
+          <p className="text-xs mt-4" style={{ color:T.ink500 }}>From Account &amp; settings you can submit a provider application.</p>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
       <div className="rounded-2xl p-6 mb-6" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
@@ -2563,7 +2604,7 @@ function App() {
   else if (effectiveRole === 'provider') {
     if (routeName === 'prov-book') page = <ProviderBookingsPage bookings={bookings}/>;
     else if (routeName === 'prov-wallet') page = <ProviderWalletPage/>;
-    else if (routeName === 'prov-profile') page = <ProviderProfilePage user={user} providers={providers} onProviderUpdate={handleProviderUpdate}/>;
+    else if (routeName === 'prov-profile') page = <ProviderProfilePage user={user} providers={providers} onProviderUpdate={handleProviderUpdate} onNavigate={goto}/>;
     else if (routeName === 'profile') page = <ProfilePage user={user} onNavigate={goto} onLogout={handleLogout} onSwitchRole={handleSwitchRole} providers={providers}/>;
     else page = <ProviderDashboard user={user} providers={providers} onRefreshPosts={refreshData}/>;
   }
