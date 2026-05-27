@@ -1867,8 +1867,10 @@ const ProfilePage = ({ user, onNavigate, onLogout, onSwitchRole, providers }) =>
   const [becomeProviderOpen, setBecomeProviderOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
   const isProvider = user?.role === 'provider';
-  const hasProviderAccount = !!user?.providerId; // true if they've onboarded as provider before
-  const myProvider = hasProviderAccount ? providers?.find(p => p.id === user.providerId) : null;
+  // Look up the actual provider record (not just the metadata flag) — it's reliable
+  const myProvider = user?.id ? providers?.find(p => p.id === user.id || p.userId === user.id) : null;
+  const hasProviderAccount = !!myProvider; // real database check
+  const recordMissing = isProvider && !myProvider; // signed up as provider but no record (e.g. Amr's broken account)
 
   const switchTo = async (newRole) => {
     setSwitching(true);
@@ -1937,16 +1939,24 @@ const ProfilePage = ({ user, onNavigate, onLogout, onSwitchRole, providers }) =>
         {/* ROLE SWITCHER */}
         <div className="rounded-2xl p-5 mb-5" style={{ background:`linear-gradient(135deg,${T.primary100},${T.accent100})`, border:`1px solid ${T.border}` }}>
           <h2 className="text-base font-semibold mb-1" style={{ color:T.ink900 }}>
-            {isProvider ? 'Switch to client mode' : (hasProviderAccount ? 'Switch back to provider mode' : 'Become a provider')}
+            {recordMissing
+              ? 'Complete your provider application'
+              : isProvider ? 'Switch to client mode'
+              : hasProviderAccount ? 'Switch back to provider mode'
+              : 'Become a provider'}
           </h2>
           <p className="text-sm mb-4" style={{ color:T.ink700 }}>
-            {isProvider
-              ? 'Browse and book sessions from other providers. Your provider profile stays intact and you can switch back any time.'
-              : hasProviderAccount
-                ? `Your provider account (${myProvider?.status === 'pending' ? 'pending review' : 'active'}) is still set up. Switch back to access your dashboard and accept bookings.`
-                : 'Offer your own services on toBayt. Adds a provider profile to your existing account — admin will review before you appear in the feed.'}
+            {recordMissing
+              ? "Your account is marked as a provider but you haven't submitted an application yet. Fill out the short form to appear in the admin's pending queue."
+              : isProvider
+                ? 'Browse and book sessions from other providers. Your provider profile stays intact and you can switch back any time.'
+                : hasProviderAccount
+                  ? `Your provider account (${myProvider?.status === 'pending' ? 'pending review' : 'active'}) is still set up. Switch back to access your dashboard and accept bookings.`
+                  : 'Offer your own services on toBayt. Adds a provider profile to your existing account — admin will review before you appear in the feed.'}
           </p>
-          {isProvider ? (
+          {recordMissing ? (
+            <Btn leadingIcon={Sparkles} variant="secondary" onClick={() => setBecomeProviderOpen(true)}>Submit provider application</Btn>
+          ) : isProvider ? (
             <Btn leadingIcon={User} onClick={() => switchTo('client')} disabled={switching}>{switching ? 'Switching…' : 'Switch to client mode'}</Btn>
           ) : hasProviderAccount ? (
             <Btn leadingIcon={Briefcase} variant="secondary" onClick={() => switchTo('provider')} disabled={switching}>{switching ? 'Switching…' : 'Switch to provider mode'}</Btn>
@@ -2081,6 +2091,7 @@ const ProviderProfilePage = ({ user, providers, onProviderUpdate, onNavigate }) 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [applyOpen, setApplyOpen] = useState(false);
 
   // Try the in-memory list first (covers both seed providers and approved real providers)
   const cached = lookupId
@@ -2134,6 +2145,17 @@ const ProviderProfilePage = ({ user, providers, onProviderUpdate, onNavigate }) 
     }
     return (
       <div className="max-w-2xl mx-auto px-4 sm:px-6 py-12">
+        <BecomeProviderModal
+          open={applyOpen}
+          onClose={() => setApplyOpen(false)}
+          user={user}
+          onDone={({ created }) => {
+            if (created) {
+              setFetched(created);
+              onProviderUpdate(created);
+            }
+          }}
+        />
         <div className="rounded-2xl p-8 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
           <Briefcase size={28} className="mx-auto mb-3" style={{ color:T.accent }}/>
           <h2 className="text-lg font-semibold mb-1" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>No provider profile yet</h2>
@@ -2141,9 +2163,9 @@ const ProviderProfilePage = ({ user, providers, onProviderUpdate, onNavigate }) 
             <p className="text-sm mb-5" style={{ color:T.ink500 }}>You're signed in as admin. The provider view is empty because admins don't have provider profiles — switch back via the role toggle to see the admin panel.</p>
           ) : (
             <>
-              <p className="text-sm mb-5" style={{ color:T.ink500 }}>You're signed in as <strong>{user?.name}</strong> ({user?.email}). To list services on toBayt, set up a provider profile.</p>
-              <Btn leadingIcon={Sparkles} variant="secondary" onClick={() => onNavigate && onNavigate('profile')}>Go to Account & settings</Btn>
-              <p className="text-xs mt-4" style={{ color:T.ink500 }}>From Account &amp; settings you can submit a provider application.</p>
+              <p className="text-sm mb-5" style={{ color:T.ink500 }}>You're signed in as <strong>{user?.name}</strong> ({user?.email}). Submit a short application to list services on toBayt — admin will review it within 48h.</p>
+              <Btn leadingIcon={Sparkles} variant="secondary" onClick={() => setApplyOpen(true)}>Submit provider application</Btn>
+              <p className="text-xs mt-4" style={{ color:T.ink500 }}>Takes 1–2 minutes. You'll appear in Browse once approved.</p>
             </>
           )}
         </div>
@@ -2390,7 +2412,7 @@ const BecomeProviderModal = ({ open, onClose, user, onDone }) => {
       try { await sb.auth.updateUser({ data: { role:'provider', providerId: userId, avatarUrl } }); } catch (e) {}
 
       // Create the provider record in Supabase (status=pending until admin approves)
-      await upsertProviderRecord({
+      const created = await upsertProviderRecord({
         userId, email: user.email,
         name: user.name, specialty: specialty.trim(), bio: bio.trim(),
         cat, priceFrom: Number(price), residency,
@@ -2399,7 +2421,7 @@ const BecomeProviderModal = ({ open, onClose, user, onDone }) => {
         status: 'pending',
       });
 
-      onDone({ providerId: userId, avatarUrl });
+      onDone({ providerId: userId, avatarUrl, created });
       onClose();
       setStep(0); setCat(''); setSpecialty(''); setBio(''); setPrice(''); setResidency(''); setAgreed(false); setAvatarFile(null); setAvatarPreview(null); setIdFile(null);
       showToast('Provider application submitted — admin will review shortly', 'success');
