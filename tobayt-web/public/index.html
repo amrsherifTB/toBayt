@@ -203,6 +203,235 @@ const userFromSession = (session) => {
 };
 
 // ============================================================
+// PROVIDERS TABLE (Supabase) — see README for SQL setup
+// ============================================================
+const mapProvider = (row) => row ? ({
+  id: row.id,                // 'p1'..'p7' for seeds, user_id::text for real signups
+  userId: row.user_id || null,
+  name: row.name,
+  email: row.email,
+  specialty: row.specialty || '',
+  cat: row.cat || 'wellness',
+  bio: row.bio || '',
+  priceFrom: row.price_from ?? 100,
+  city: row.city || 'Doha',
+  distance: Number(row.distance ?? 5),
+  verified: !!row.verified,
+  cover: row.cover || 'warm-orange',
+  avatarUrl: row.avatar_url || null,
+  idUrl: row.id_url || null,
+  residency: row.residency || '',
+  services: Array.isArray(row.services) ? row.services : [],
+  rating: Number(row.rating ?? 0),
+  reviews: row.reviews ?? 0,
+  status: row.status || 'pending',
+  createdAt: row.created_at,
+}) : null;
+
+async function upsertProviderRecord(p) {
+  const row = {
+    id: p.userId,                  // real signups use their auth uid as the provider id
+    user_id: p.userId,
+    name: p.name,
+    email: p.email || null,
+    specialty: p.specialty || '',
+    cat: p.cat || 'wellness',
+    bio: p.bio || '',
+    price_from: Number(p.priceFrom) || 100,
+    city: p.city || 'Doha',
+    cover: p.cover || 'warm-orange',
+    avatar_url: p.avatarUrl || null,
+    id_url: p.idUrl || null,
+    residency: p.residency || '',
+    services: Array.isArray(p.services) && p.services.length ? p.services : [
+      { id:`s-${Math.random().toString(36).slice(2,8)}`, title:`${p.specialty || 'Session'} — 60min`, duration:60, price:Number(p.priceFrom) || 100, locType:'both' }
+    ],
+    status: p.status || 'pending',
+  };
+  const { data, error } = await sb.from('providers').upsert(row, { onConflict: 'id' }).select().single();
+  if (error) throw error;
+  return mapProvider(data);
+}
+
+async function fetchApprovedProvidersFromSupabase() {
+  const { data, error } = await sb.from('providers').select('*').eq('status', 'approved');
+  if (error) { console.warn('Supabase providers fetch failed:', error.message); return []; }
+  return (data || []).map(mapProvider);
+}
+
+async function fetchPendingProvidersFromSupabase() {
+  const { data, error } = await sb.from('providers').select('*').eq('status', 'pending').order('created_at', { ascending: false });
+  if (error) { console.warn('Supabase pending fetch failed:', error.message); return []; }
+  return (data || []).map(mapProvider);
+}
+
+async function fetchProviderByUserId(userId) {
+  if (!userId) return null;
+  const { data, error } = await sb.from('providers').select('*').eq('user_id', userId).maybeSingle();
+  if (error) { console.warn('Supabase provider lookup failed:', error.message); return null; }
+  return mapProvider(data);
+}
+
+// ----- POSTS -----
+const mapPost = (row) => row ? ({
+  id: row.id,
+  providerId: row.provider_id,
+  caption: row.caption || '',
+  serviceTitle: row.service_title || '',
+  imageUrl: row.image_url || null,
+  likes: row.likes || 0,
+  time: row.created_at ? humanTime(row.created_at) : 'Just now',
+  coverTone: row.cover_tone || 'warm-orange',
+  proofBadge: row.proof_badge || null,
+  proofKind: row.proof_kind || 'outcome',
+  isCollab: !!row.is_collab,
+  collabPartnerId: row.collab_partner_id || null,
+  collab: row.collab || null,
+}) : null;
+
+function humanTime(iso) {
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60) return 'Just now';
+  if (diff < 3600) return `${Math.floor(diff/60)}m`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h`;
+  if (diff < 86400*7) return `${Math.floor(diff/86400)}d`;
+  return new Date(iso).toLocaleDateString();
+}
+
+async function fetchPostsFromSupabase() {
+  const { data, error } = await sb.from('posts').select('*').order('created_at', { ascending: false });
+  if (error) { console.warn('Supabase posts fetch failed:', error.message); return []; }
+  return (data || []).map(mapPost);
+}
+
+async function insertPost(post) {
+  const row = {
+    id: `post-${Math.random().toString(36).slice(2,10)}`,
+    provider_id: post.providerId,
+    caption: post.caption || '',
+    service_title: post.serviceTitle || null,
+    image_url: post.imageUrl || null,
+    cover_tone: post.coverTone || 'warm-orange',
+    proof_badge: post.proofBadge || 'Just posted',
+    proof_kind: post.proofKind || 'outcome',
+  };
+  const { data, error } = await sb.from('posts').insert(row).select().single();
+  if (error) throw error;
+  return mapPost(data);
+}
+
+// ----- BOOKINGS -----
+const mapBooking = (row) => row ? ({
+  id: row.id,
+  userId: row.user_id,
+  providerId: row.provider_id,
+  providerName: row.provider_name,
+  providerCover: row.provider_cover,
+  serviceId: row.service_id,
+  serviceTitle: row.service_title,
+  date: row.date,
+  slot: row.slot,
+  when: row.when_text,
+  locType: row.loc_type,
+  total: row.total,
+  status: row.status,
+  isInquiry: !!row.is_inquiry,
+  createdAt: row.created_at,
+}) : null;
+
+async function fetchBookingsForUser(userId, role) {
+  let q = sb.from('bookings').select('*').order('created_at', { ascending: false });
+  if (role !== 'admin') {
+    if (role === 'provider') q = q.eq('provider_id', userId);
+    else q = q.eq('user_id', userId);
+  }
+  const { data, error } = await q;
+  if (error) { console.warn('Bookings fetch failed:', error.message); return []; }
+  return (data || []).map(mapBooking);
+}
+
+async function insertBooking(b) {
+  const row = {
+    user_id: b.userId || null,
+    provider_id: b.providerId,
+    provider_name: b.providerName,
+    provider_cover: b.providerCover,
+    service_id: b.serviceId,
+    service_title: b.serviceTitle,
+    date: b.date,
+    slot: b.slot,
+    when_text: b.when,
+    loc_type: b.locType,
+    total: b.total,
+    status: b.status || 'pending',
+    is_inquiry: !!b.isInquiry,
+  };
+  const { data, error } = await sb.from('bookings').insert(row).select().single();
+  if (error) throw error;
+  return mapBooking(data);
+}
+
+async function updateBooking(id, updates) {
+  const map = { status:'status', date:'date', slot:'slot', when:'when_text', paymentMethod:'payment_method' };
+  const row = {};
+  for (const [k, col] of Object.entries(map)) if (k in updates) row[col] = updates[k];
+  const { data, error } = await sb.from('bookings').update(row).eq('id', id).select().single();
+  if (error) throw error;
+  return mapBooking(data);
+}
+
+// ----- MESSAGES -----
+const mapMessage = (row) => row ? ({
+  id: row.id,
+  bookingId: row.booking_id,
+  from: row.from_user,
+  text: row.text,
+  icon: row.icon || null,
+  system: !!row.is_system,
+  read: !!row.read,
+  time: humanTime(row.created_at),
+}) : null;
+
+async function fetchMessagesForBooking(bookingId) {
+  const { data, error } = await sb.from('messages').select('*').eq('booking_id', bookingId).order('created_at');
+  if (error) return [];
+  return (data || []).map(mapMessage);
+}
+
+async function insertMessage(m) {
+  const row = {
+    booking_id: m.bookingId,
+    from_user: m.from || (m.system ? 'system' : 'client'),
+    text: m.text,
+    icon: m.icon || null,
+    is_system: !!m.system,
+    read: !!m.read,
+  };
+  const { data, error } = await sb.from('messages').insert(row).select().single();
+  if (error) throw error;
+  return mapMessage(data);
+}
+
+async function markMessagesRead(bookingId) {
+  await sb.from('messages').update({ read: true }).eq('booking_id', bookingId).eq('from_user', 'provider');
+}
+
+async function updateProviderRecord(providerId, updates) {
+  const r = {};
+  const map = {
+    name:'name', specialty:'specialty', bio:'bio', city:'city',
+    priceFrom:'price_from', cat:'cat', cover:'cover',
+    avatarUrl:'avatar_url', idUrl:'id_url',
+    services:'services', status:'status',
+  };
+  for (const [k, col] of Object.entries(map)) if (k in updates) r[col] = updates[k];
+  if (updates.status === 'approved') r.verified = true;
+  const { data, error } = await sb.from('providers').update(r).eq('id', providerId).select().single();
+  if (error) throw error;
+  return mapProvider(data);
+}
+
+// ============================================================
 // TOAST
 // ============================================================
 const _toastListeners = new Set();
@@ -749,24 +978,27 @@ const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
         try { await sb.auth.updateUser({ data: { providerId: userId, avatarUrl } }); } catch (e) {}
       }
 
-      // 5. ALWAYS create provider record so admin can see the pending application,
+      // 5. ALWAYS create provider record in Supabase so admin sees the pending application,
       //    even if email confirmation is on and the user has no session yet.
       try {
-        await apiFetch('/api/providers', {
-          method:'POST',
-          body: JSON.stringify({
-            userId, email: email.trim(),
-            name: name.trim(),
-            specialty: specialty.trim(),
-            bio: bio.trim(),
-            cat,
-            priceFrom: Number(price),
-            residency,
-            cover: tones[cat] || 'warm-orange',
-            avatarUrl, idUrl,
-          })
+        await upsertProviderRecord({
+          userId, email: email.trim(),
+          name: name.trim(),
+          specialty: specialty.trim(),
+          bio: bio.trim(),
+          cat,
+          priceFrom: Number(price),
+          residency,
+          cover: tones[cat] || 'warm-orange',
+          avatarUrl, idUrl,
+          status: 'pending',
         });
-      } catch (e) { console.warn('Failed to create provider record:', e); }
+      } catch (e) {
+        console.warn('Failed to create provider record:', e);
+        setError(`Couldn't save provider profile: ${e.message}. Check that the Supabase 'providers' table exists.`);
+        setSubmitting(false);
+        return;
+      }
 
       if (!hasSession) {
         setError('Application submitted! Check your email to confirm, then log in.');
@@ -1307,7 +1539,13 @@ const FeedPage = ({ providers, posts, onNavigate, onBook, onBookCollab }) => {
             <p className="text-sm mt-1" style={{ color:T.ink500 }}>Real outcomes from completed bookings.</p>
           </div>
           <div className="flex flex-col gap-5">
-            {posts.map(post => (
+            {posts.length === 0 ? (
+              <div className="rounded-2xl p-12 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+                <Sparkles size={28} className="mx-auto mb-3" style={{ color:T.accent }}/>
+                <div className="text-base font-semibold mb-1" style={{ color:T.ink900, fontFamily:'Fraunces,serif' }}>Nothing here yet</div>
+                <p className="text-sm" style={{ color:T.ink500 }}>Providers haven't posted any work yet. Check back soon, or <button onClick={() => onNavigate('explore')} className="font-medium" style={{ color:T.primary }}>browse experts directly</button>.</p>
+              </div>
+            ) : posts.map(post => (
               <PostCard key={post.id} post={post} providers={providers} onBook={onBook} onBookCollab={onBookCollab} onProvider={id => onNavigate('provider', { providerId: id })}/>
             ))}
           </div>
@@ -1320,7 +1558,9 @@ const FeedPage = ({ providers, posts, onNavigate, onBook, onBookCollab }) => {
                 <button onClick={() => onNavigate('explore')} className="text-xs font-medium" style={{ color:T.primary }}>See all →</button>
               </div>
               <div className="flex flex-col gap-2">
-                {providers.slice(0,5).map(p => (
+                {providers.length === 0 ? (
+                  <div className="text-xs py-3 text-center" style={{ color:T.ink500 }}>No approved providers yet.</div>
+                ) : providers.slice(0,5).map(p => (
                   <button key={p.id} onClick={() => onNavigate('provider', { providerId: p.id })} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 text-left">
                     <CoverArt tone={p.cover} className="w-10 h-10 rounded-lg flex-shrink-0"/>
                     <div className="flex-1 min-w-0">
@@ -1735,7 +1975,7 @@ const ProfilePage = ({ user, onNavigate, onLogout, onSwitchRole, providers }) =>
 // PROVIDER DASHBOARD
 // ============================================================
 const ProviderDashboard = ({ user, providers, onRefreshPosts }) => {
-  const me = providers.find(p => p.id === user?.providerId) || providers.find(p => p.id === 'p2');
+  const me = providers.find(p => p.id === user?.providerId);
   const isPending = me?.status === 'pending';
   const [postOpen, setPostOpen] = useState(false);
   return (
@@ -1832,54 +2072,54 @@ const ProviderWalletPage = () => (
 // ============================================================
 const ProviderProfilePage = ({ user, providers, onProviderUpdate, onNavigate }) => {
   // Decide which provider record to display:
-  // 1. Logged-in real provider → their own record (lookup by id OR userId)
-  // 2. Admin viewing as provider (no providerId) → demo provider p2 (Khalid)
-  // 3. Nothing found yet → fall back to user object so we still show something useful
-  const lookupId = user?.providerId || (user?.role === 'admin' ? 'p2' : null);
+  // 1. Real logged-in user → look up by their auth.uid() in Supabase
+  // 2. Admin viewing as provider → no demo data, just show an empty state
+  const isAdminViewer = user?.id === 'admin-shortcut' || user?.role === 'admin';
+  const lookupId = isAdminViewer ? null : user?.id;
   const [fetched, setFetched] = useState(null);
   const [fetchError, setFetchError] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
-  // Try the cached list first, then fall back to a direct GET (handles pending providers)
-  const cached = lookupId ? providers.find(p => p.id === lookupId || p.userId === lookupId) : null;
+  // Try the in-memory list first (covers both seed providers and approved real providers)
+  const cached = lookupId
+    ? providers.find(p => p.id === lookupId || p.userId === lookupId)
+    : null;
   const me = cached || fetched;
 
+  // If not in the cached list, fetch directly (handles pending providers + admin seed lookups)
   useEffect(() => {
     if (cached || !lookupId) return;
     setFetchError(false);
-    apiFetch(`/api/providers/${lookupId}`)
-      .then(r => r.ok ? r.json() : Promise.reject(new Error('not found')))
-      .then(p => setFetched(p))
-      .catch(() => setFetchError(true));
-  }, [lookupId, cached?.id]);
+    // Real users: lookup by user_id. (Admin viewer is short-circuited to null lookupId.)
+    const lookup = sb.from('providers').select('*').eq('user_id', lookupId).maybeSingle();
+    lookup.then(({ data, error }) => {
+      if (error || !data) setFetchError(true);
+      else setFetched(mapProvider(data));
+    });
+  }, [lookupId, cached?.id, isAdminViewer]);
 
   useEffect(() => { if (me) setDraft({ name: me.name, specialty: me.specialty, bio: me.bio, priceFrom: me.priceFrom, city: me.city }); }, [me?.id]);
 
   const save = async () => {
     if (!me) return;
     try {
-      const res = await apiFetch(`/api/providers/${me.id}`, { method:'PUT', body: JSON.stringify({ ...draft, priceFrom: Number(draft.priceFrom) }) });
-      if (!res.ok) throw new Error('Failed');
-      const updated = await res.json();
+      const updated = await updateProviderRecord(me.id, { ...draft, priceFrom: Number(draft.priceFrom) });
       onProviderUpdate(updated);
       setFetched(updated);
       showToast('Profile updated', 'success');
       setEditing(false);
-    } catch (e) { showToast('Failed to save', 'error'); }
+    } catch (e) { showToast('Failed to save: ' + e.message, 'error'); }
   };
   const handleAvatarChange = async (file) => {
     if (!file || !user?.id || user.id === 'admin-shortcut' || !me) return;
     setUploadingAvatar(true);
     try {
       const url = await uploadToBucket('provider-avatars', file, user.id);
-      const res = await apiFetch(`/api/providers/${me.id}`, { method:'PUT', body: JSON.stringify({ avatarUrl: url }) });
-      if (res.ok) {
-        const updated = await res.json();
-        onProviderUpdate(updated);
-        setFetched(updated);
-      }
+      const updated = await updateProviderRecord(me.id, { avatarUrl: url });
+      onProviderUpdate(updated);
+      setFetched(updated);
       try { await sb.auth.updateUser({ data: { avatarUrl: url } }); } catch (e) {}
       showToast('Photo updated', 'success');
     } catch (e) { showToast('Upload failed: ' + e.message, 'error'); }
@@ -1897,9 +2137,15 @@ const ProviderProfilePage = ({ user, providers, onProviderUpdate, onNavigate }) 
         <div className="rounded-2xl p-8 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
           <Briefcase size={28} className="mx-auto mb-3" style={{ color:T.accent }}/>
           <h2 className="text-lg font-semibold mb-1" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>No provider profile yet</h2>
-          <p className="text-sm mb-5" style={{ color:T.ink500 }}>You're signed in as <strong>{user?.name}</strong> ({user?.email}). To list services on toBayt, set up a provider profile.</p>
-          <Btn leadingIcon={Sparkles} variant="secondary" onClick={() => onNavigate && onNavigate('profile')}>Go to Account & settings</Btn>
-          <p className="text-xs mt-4" style={{ color:T.ink500 }}>From Account &amp; settings you can submit a provider application.</p>
+          {isAdminViewer ? (
+            <p className="text-sm mb-5" style={{ color:T.ink500 }}>You're signed in as admin. The provider view is empty because admins don't have provider profiles — switch back via the role toggle to see the admin panel.</p>
+          ) : (
+            <>
+              <p className="text-sm mb-5" style={{ color:T.ink500 }}>You're signed in as <strong>{user?.name}</strong> ({user?.email}). To list services on toBayt, set up a provider profile.</p>
+              <Btn leadingIcon={Sparkles} variant="secondary" onClick={() => onNavigate && onNavigate('profile')}>Go to Account & settings</Btn>
+              <p className="text-xs mt-4" style={{ color:T.ink500 }}>From Account &amp; settings you can submit a provider application.</p>
+            </>
+          )}
         </div>
       </div>
     );
@@ -1971,24 +2217,23 @@ const AdminPage = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [appsRes, usersRes] = await Promise.all([
-        apiFetch('/api/providers/pending'),
-        apiFetch('/api/users'),
-      ]);
-      if (appsRes.ok) setApplications(await appsRes.json());
-      if (usersRes.ok) setUsers(await usersRes.json());
-    } catch (e) {}
+      const pending = await fetchPendingProvidersFromSupabase();
+      setApplications(pending);
+      // We no longer keep a user list on the backend — users live in Supabase Auth.
+      // Show approved providers in the "Users" tab instead (it's the closest equivalent).
+      const approved = await fetchApprovedProvidersFromSupabase();
+      setUsers(approved.map(p => ({ id: p.userId, email: p.email, name: p.name, role: 'provider' })));
+    } catch (e) { console.warn('Admin load failed:', e); }
     setLoading(false);
   };
   useEffect(() => { loadData(); }, []);
 
-  const setStatus = async (id, status) => {
+  const setStatus = async (userId, status) => {
     try {
-      const res = await apiFetch(`/api/providers/${id}/status`, { method:'PUT', body: JSON.stringify({ status }) });
-      if (!res.ok) throw new Error('Failed');
+      await updateProviderRecord(userId, { status });
       showToast(status === 'approved' ? 'Provider approved' : 'Provider rejected', 'success');
       loadData();
-    } catch (e) { showToast('Action failed', 'error'); }
+    } catch (e) { showToast('Action failed: ' + e.message, 'error'); }
   };
 
   return (
@@ -2144,16 +2389,14 @@ const BecomeProviderModal = ({ open, onClose, user, onDone }) => {
       // Update user_metadata — change role + record providerId
       try { await sb.auth.updateUser({ data: { role:'provider', providerId: userId, avatarUrl } }); } catch (e) {}
 
-      // Create the provider record (status=pending until admin approves)
-      await apiFetch('/api/providers', {
-        method:'POST',
-        body: JSON.stringify({
-          userId, email: user.email,
-          name: user.name, specialty: specialty.trim(), bio: bio.trim(),
-          cat, priceFrom: Number(price), residency,
-          cover: tones[cat] || 'warm-orange',
-          avatarUrl, idUrl,
-        })
+      // Create the provider record in Supabase (status=pending until admin approves)
+      await upsertProviderRecord({
+        userId, email: user.email,
+        name: user.name, specialty: specialty.trim(), bio: bio.trim(),
+        cat, priceFrom: Number(price), residency,
+        cover: tones[cat] || 'warm-orange',
+        avatarUrl, idUrl,
+        status: 'pending',
       });
 
       onDone({ providerId: userId, avatarUrl });
@@ -2281,16 +2524,13 @@ const NewPostModal = ({ open, onClose, user, providers, onPosted }) => {
         catch (e) { console.warn('Photo upload failed:', e.message); }
       }
       const me = providers.find(p => p.id === user?.providerId);
-      await apiFetch('/api/posts', {
-        method:'POST',
-        body: JSON.stringify({
-          providerId: user?.providerId,
-          caption: caption.trim(),
-          imageUrl,
-          coverTone: me?.cover || 'warm-orange',
-          proofKind: 'outcome',
-          proofBadge: 'Just posted',
-        })
+      await insertPost({
+        providerId: user?.providerId,
+        caption: caption.trim(),
+        imageUrl,
+        coverTone: me?.cover || 'warm-orange',
+        proofKind: 'outcome',
+        proofBadge: 'Just posted',
       });
       showToast('Post published!', 'success');
       setCaption(''); setPhotoFile(null); setPhotoPreview(null);
@@ -2383,40 +2623,39 @@ function App() {
     return () => { active = false; subscription?.unsubscribe(); };
   }, []);
 
-  // Data load — includes the current user's own provider record (might be pending)
+  // Data load — everything from Supabase, no backend dependency
   const refreshData = useCallback(async () => {
     try {
-      const [pRes, postRes, bRes] = await Promise.all([
-        apiFetch('/api/providers'),
-        apiFetch('/api/posts'),
-        apiFetch('/api/bookings'),
-      ]);
-      const p = pRes.ok ? await pRes.json() : [];
-      const po = postRes.ok ? await postRes.json() : [];
-      const b = bRes.ok ? await bRes.json() : [];
+      const role = user?.role === 'admin' ? 'admin' : user?.role || 'client';
+      const userId = user?.id && user.id !== 'admin-shortcut' ? user.id : null;
 
-      // Pull current user's own provider record (could be pending — not in the public list)
-      let merged = p;
-      if (user?.providerId) {
+      const [approvedProviders, posts, bookings] = await Promise.all([
+        fetchApprovedProvidersFromSupabase(),
+        fetchPostsFromSupabase(),
+        userId ? fetchBookingsForUser(userId, role) : (role === 'admin' ? fetchBookingsForUser(null, 'admin') : Promise.resolve([])),
+      ]);
+
+      // Include the current user's own provider record if it's pending (not in approved list)
+      let merged = [...approvedProviders];
+      if (userId) {
         try {
-          const mineRes = await apiFetch(`/api/providers/${user.providerId}`);
-          if (mineRes.ok) {
-            const mine = await mineRes.json();
-            if (!merged.find(x => x.id === mine.id)) merged = [mine, ...merged];
-          }
+          const mine = await fetchProviderByUserId(userId);
+          if (mine && !merged.find(x => x.id === mine.id)) merged = [mine, ...merged];
         } catch (e) {}
       }
 
       setProviders(merged);
-      setPosts(po);
-      setBookings(b);
-      const threadEntries = await Promise.all(b.map(booking =>
-        apiFetch(`/api/threads/${booking.id}`).then(r => r.ok ? r.json() : []).then(msgs => [booking.id, msgs])
+      setPosts(posts);
+      setBookings(bookings);
+
+      // Pull messages for each booking
+      const threadEntries = await Promise.all(bookings.map(b =>
+        fetchMessagesForBooking(b.id).then(msgs => [b.id, msgs])
       ));
       const threadMap = {};
       threadEntries.forEach(([id, msgs]) => { threadMap[id] = msgs; });
       setThreads(threadMap);
-    } catch (e) {}
+    } catch (e) { console.warn('refreshData failed:', e); }
     setLoading(false);
   }, [user]);
 
@@ -2484,6 +2723,7 @@ function App() {
   const handleBookComplete = async (data) => {
     const provider = bookingModal.provider;
     const newBooking = {
+      userId: user?.id && user.id !== 'admin-shortcut' ? user.id : null,
       providerId: provider.id,
       providerName: provider.name, providerCover: provider.cover,
       serviceTitle: data.service.title, serviceId: data.service.id,
@@ -2494,15 +2734,12 @@ function App() {
       status: 'pending',
     };
     try {
-      const res = await apiFetch('/api/bookings', { method:'POST', body: JSON.stringify(newBooking) });
-      const created = await res.json();
+      const created = await insertBooking(newBooking);
       setBookings(p => [created, ...p]);
-      const tr = await apiFetch(`/api/threads/${created.id}`);
-      if (tr.ok) {
-        const msgs = await tr.json();
-        setThreads(p => ({ ...p, [created.id]: msgs }));
-      }
-    } catch (e) {}
+      // Seed system message
+      const sysMsg = await insertMessage({ bookingId: created.id, from:'system', system:true, icon:'calendar', text:`Booking request sent to ${created.providerName}` });
+      setThreads(p => ({ ...p, [created.id]: sysMsg ? [sysMsg] : [] }));
+    } catch (e) { showToast('Booking failed: ' + e.message, 'error'); }
     setBookingModal(null);
     showToast('Booking request sent!', 'success');
     goto('bookings');
@@ -2512,56 +2749,69 @@ function App() {
   const handlePaymentSuccess = async (method) => {
     const id = paymentModal?.id;
     try {
-      await apiFetch(`/api/bookings/${id}`, { method:'PUT', body: JSON.stringify({ status:'confirmed', paymentMethod:method }) });
-    } catch (e) {}
-    setBookings(p => p.map(b => b.id === id ? { ...b, status:'confirmed', paymentMethod:method } : b));
+      const updated = await updateBooking(id, { status:'confirmed', paymentMethod: method });
+      setBookings(p => p.map(b => b.id === id ? updated : b));
+    } catch (e) {
+      setBookings(p => p.map(b => b.id === id ? { ...b, status:'confirmed' } : b));
+    }
     setPaymentModal(null);
     showToast('Payment confirmed!', 'success');
   };
 
   const handleCancel = async (id, refund) => {
     try {
-      await apiFetch(`/api/bookings/${id}`, { method:'PUT', body: JSON.stringify({ status:'cancelled', refundedAmount: refund }) });
-    } catch (e) {}
-    setBookings(p => p.map(b => b.id === id ? { ...b, status:'cancelled' } : b));
+      const updated = await updateBooking(id, { status:'cancelled' });
+      setBookings(p => p.map(b => b.id === id ? updated : b));
+    } catch (e) {
+      setBookings(p => p.map(b => b.id === id ? { ...b, status:'cancelled' } : b));
+    }
     showToast(`Booking cancelled · QAR ${refund} refund initiated`);
   };
 
   const handleRescheduleComplete = async (id, newDate, newSlot) => {
     const when = `${fmtDateShort(newDate)} · ${newSlot}`;
     try {
-      await apiFetch(`/api/bookings/${id}`, { method:'PUT', body: JSON.stringify({ date:newDate.toISOString(), slot:newSlot, when }) });
-    } catch (e) {}
-    setBookings(p => p.map(b => b.id === id ? { ...b, date:newDate.toISOString(), slot:newSlot, when } : b));
+      const updated = await updateBooking(id, { date:newDate.toISOString(), slot:newSlot, when });
+      setBookings(p => p.map(b => b.id === id ? updated : b));
+    } catch (e) {
+      setBookings(p => p.map(b => b.id === id ? { ...b, date:newDate.toISOString(), slot:newSlot, when } : b));
+    }
     setRescheduleModal(null);
     showToast('Booking rescheduled!', 'success');
   };
 
   const handleSend = async (id, text) => {
-    const msg = { from:'client', text };
     try {
-      const res = await apiFetch(`/api/threads/${id}`, { method:'POST', body: JSON.stringify(msg) });
-      const created = await res.json();
+      const created = await insertMessage({ bookingId: id, from:'client', text });
       setThreads(p => ({ ...p, [id]: [...(p[id]||[]), created] }));
     } catch (e) {
-      setThreads(p => ({ ...p, [id]: [...(p[id]||[]), { ...msg, id: Date.now(), time:'Just now' }] }));
+      setThreads(p => ({ ...p, [id]: [...(p[id]||[]), { id: Date.now(), from:'client', text, time:'Just now' }] }));
     }
   };
 
   const handleMarkRead = async (id) => {
-    try { await apiFetch(`/api/threads/${id}/read`, { method:'POST' }); } catch(e) {}
+    try { await markMessagesRead(id); } catch (e) {}
     setThreads(p => ({ ...p, [id]: (p[id]||[]).map(m => m.from==='provider' ? {...m, read:true} : m) }));
   };
 
   const handleProviderInquiry = (prov) => {
-    requireAuth(() => {
-      const iid = `inquiry-${prov.id}`;
-      if (!bookings.find(b => b.id === iid)) {
-        const inq = { id:iid, providerId:prov.id, providerName:prov.name, providerCover:prov.cover, serviceTitle:'Inquiry · no booking yet', when:'Pre-booking', isInquiry:true };
-        setBookings(p => [inq, ...p]);
-        setThreads(p => ({ ...p, [iid]: [] }));
-      }
-      goto('messages', { bookingId: iid });
+    requireAuth(async () => {
+      // Look for an existing inquiry-style booking with this provider
+      const existing = bookings.find(b => b.providerId === prov.id && b.isInquiry);
+      if (existing) { goto('messages', { bookingId: existing.id }); return; }
+      try {
+        const created = await insertBooking({
+          userId: user?.id, providerId: prov.id,
+          providerName: prov.name, providerCover: prov.cover,
+          serviceTitle: 'Inquiry · no booking yet',
+          when: 'Pre-booking',
+          isInquiry: true,
+          status: 'pending',
+        });
+        setBookings(p => [created, ...p]);
+        setThreads(p => ({ ...p, [created.id]: [] }));
+        goto('messages', { bookingId: created.id });
+      } catch (e) { showToast('Failed to start inquiry: ' + e.message, 'error'); }
     });
   };
 

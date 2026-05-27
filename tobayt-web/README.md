@@ -27,7 +27,39 @@ For things to work end-to-end you need:
 Dashboard → **Authentication → Providers → Email** → turn **off** "Confirm email".
 (If you leave it on, users have to click an email link before they can log in — fine for prod, annoying for testing.)
 
-### 2. Make storage buckets public
+### 2. Create the `providers` table (one-time, required)
+
+Provider applications and approved providers live in a Supabase table so they survive backend restarts. Open **Supabase dashboard → SQL Editor**, paste and run:
+
+```sql
+create table if not exists public.providers (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  name text not null,
+  email text,
+  specialty text,
+  cat text,
+  bio text,
+  price_from int default 100,
+  city text default 'Doha',
+  distance numeric default 5,
+  verified boolean default false,
+  cover text default 'warm-orange',
+  avatar_url text,
+  id_url text,
+  residency text,
+  services jsonb default '[]'::jsonb,
+  rating numeric default 0,
+  reviews int default 0,
+  status text default 'pending' check (status in ('pending','approved','rejected')),
+  created_at timestamptz default now()
+);
+
+-- For the demo we leave RLS off so admin can update statuses without a service-role key.
+-- Add proper policies before going to production.
+alter table public.providers disable row level security;
+```
+
+### 3. Make storage buckets public
 For each bucket — `provider-avatars`, `work-proof-posts`, `service-thumbnails`, `id-verification`, `chat-attachments`:
 Dashboard → **Storage → bucket → Policies → New policy → Get started quickly → "Allow public read"**.
 
