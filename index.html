@@ -22,9 +22,18 @@
   input, textarea, button, select { font-family: inherit; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-  @keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(-8px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+  @keyframes pop { 0% { transform: scale(0.94); opacity: 0; } 60% { transform: scale(1.02); opacity: 1; } 100% { transform: scale(1); } }
   .fade-in { animation: fadeIn 0.25s ease-out; }
-  .slide-up { animation: slideUp 0.3s ease-out; }
+  .slide-up { animation: slideUp 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+  .pop-in { animation: pop 0.32s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .skeleton {
+    background: linear-gradient(90deg, #ECE9E0 0%, #F5F2EA 50%, #ECE9E0 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.4s infinite linear;
+    border-radius: 8px;
+  }
 </style>
 </head>
 <body>
@@ -199,6 +208,10 @@ const userFromSession = (session) => {
     role: m.role || 'client',
     providerId: m.providerId || (m.role === 'provider' ? session.user.id : null),
     avatarUrl: m.avatarUrl || null,
+    phone: m.phone || null,
+    city: m.city || 'Doha',
+    notificationPrefs: m.notificationPrefs || null,
+    privacyPrefs: m.privacyPrefs || null,
   };
 };
 
@@ -324,6 +337,8 @@ async function insertPost(post) {
 const mapBooking = (row) => row ? ({
   id: row.id,
   userId: row.user_id,
+  clientName: row.client_name || null,
+  clientEmail: row.client_email || null,
   providerId: row.provider_id,
   providerName: row.provider_name,
   providerCover: row.provider_cover,
@@ -353,6 +368,8 @@ async function fetchBookingsForUser(userId, role) {
 async function insertBooking(b) {
   const row = {
     user_id: b.userId || null,
+    client_name: b.clientName || null,
+    client_email: b.clientEmail || null,
     provider_id: b.providerId,
     provider_name: b.providerName,
     provider_cover: b.providerCover,
@@ -386,6 +403,7 @@ const mapMessage = (row) => row ? ({
   bookingId: row.booking_id,
   from: row.from_user,
   text: row.text,
+  imageUrl: row.image_url || null,
   icon: row.icon || null,
   system: !!row.is_system,
   read: !!row.read,
@@ -402,7 +420,8 @@ async function insertMessage(m) {
   const row = {
     booking_id: m.bookingId,
     from_user: m.from || (m.system ? 'system' : 'client'),
-    text: m.text,
+    text: m.text || null,
+    image_url: m.imageUrl || null,
     icon: m.icon || null,
     is_system: !!m.system,
     read: !!m.read,
@@ -415,6 +434,109 @@ async function insertMessage(m) {
 async function markMessagesRead(bookingId) {
   await sb.from('messages').update({ read: true }).eq('booking_id', bookingId).eq('from_user', 'provider');
 }
+
+// ----- ADDRESSES -----
+async function fetchAddresses(userId) {
+  const { data } = await sb.from('addresses').select('*').eq('user_id', userId).order('is_default', { ascending: false });
+  return data || [];
+}
+async function addAddress(userId, label, address) {
+  const { data, error } = await sb.from('addresses').insert({ user_id: userId, label, address }).select().single();
+  if (error) throw error;
+  return data;
+}
+async function deleteAddress(id) { await sb.from('addresses').delete().eq('id', id); }
+
+// ----- PAYMENT METHODS -----
+async function fetchPaymentMethods(userId) {
+  const { data } = await sb.from('payment_methods').select('*').eq('user_id', userId).order('is_default', { ascending: false });
+  return data || [];
+}
+async function addPaymentMethod(userId, m) {
+  const { data, error } = await sb.from('payment_methods').insert({
+    user_id: userId, brand: m.brand || 'Visa', last4: m.last4, expiry: m.expiry, cardholder: m.cardholder,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+async function deletePaymentMethod(id) { await sb.from('payment_methods').delete().eq('id', id); }
+async function setDefaultPaymentMethod(userId, id) {
+  await sb.from('payment_methods').update({ is_default: false }).eq('user_id', userId);
+  await sb.from('payment_methods').update({ is_default: true }).eq('id', id);
+}
+
+// ----- FAVORITES & FOLLOWS -----
+async function fetchFavorites(userId) {
+  const { data } = await sb.from('favorites').select('provider_id').eq('user_id', userId);
+  return (data || []).map(r => r.provider_id);
+}
+async function toggleFavorite(userId, providerId) {
+  const { data: existing } = await sb.from('favorites').select('user_id').eq('user_id', userId).eq('provider_id', providerId).maybeSingle();
+  if (existing) { await sb.from('favorites').delete().eq('user_id', userId).eq('provider_id', providerId); return false; }
+  await sb.from('favorites').insert({ user_id: userId, provider_id: providerId });
+  return true;
+}
+async function fetchFollows(userId) {
+  const { data } = await sb.from('follows').select('provider_id').eq('user_id', userId);
+  return (data || []).map(r => r.provider_id);
+}
+async function toggleFollow(userId, providerId) {
+  const { data: existing } = await sb.from('follows').select('user_id').eq('user_id', userId).eq('provider_id', providerId).maybeSingle();
+  if (existing) { await sb.from('follows').delete().eq('user_id', userId).eq('provider_id', providerId); return false; }
+  await sb.from('follows').insert({ user_id: userId, provider_id: providerId });
+  return true;
+}
+
+// ----- TRANSACTIONS (provider wallet) -----
+async function fetchTransactions(providerId) {
+  const { data } = await sb.from('transactions').select('*').eq('provider_id', providerId).order('created_at', { ascending: false });
+  return data || [];
+}
+async function addTransaction(providerId, kind, amount, description, bookingId) {
+  const { data, error } = await sb.from('transactions').insert({
+    provider_id: providerId, kind, amount, description, booking_id: bookingId || null,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// ----- LIKES -----
+async function toggleLike(userId, postId) {
+  const { data: existing } = await sb.from('likes').select('user_id').eq('user_id', userId).eq('post_id', postId).maybeSingle();
+  if (existing) {
+    await sb.from('likes').delete().eq('user_id', userId).eq('post_id', postId);
+    await sb.rpc('decrement_likes', { p_id: postId }).catch(() => {});
+    return false;
+  }
+  await sb.from('likes').insert({ user_id: userId, post_id: postId });
+  await sb.rpc('increment_likes', { p_id: postId }).catch(() => {});
+  return true;
+}
+async function fetchLikedPosts(userId) {
+  const { data } = await sb.from('likes').select('post_id').eq('user_id', userId);
+  return (data || []).map(r => r.post_id);
+}
+
+// ----- COLLABS -----
+async function fetchCollabsForProvider(providerId) {
+  const { data } = await sb.from('collabs').select('*').or(`provider_a_id.eq.${providerId},provider_b_id.eq.${providerId}`).order('created_at', { ascending: false });
+  return data || [];
+}
+async function fetchActiveCollabs() {
+  const { data } = await sb.from('collabs').select('*').eq('status', 'active');
+  return data || [];
+}
+async function createCollab(c) {
+  const { data, error } = await sb.from('collabs').insert({
+    provider_a_id: c.providerAId, provider_b_id: c.providerBId,
+    title: c.title, description: c.description,
+    regular_price: c.regularPrice, bundle_price: c.bundlePrice,
+    duration_text: c.durationText, status: 'active',
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+async function deleteCollab(id) { await sb.from('collabs').delete().eq('id', id); }
 
 async function updateProviderRecord(providerId, updates) {
   const r = {};
@@ -452,7 +574,7 @@ const ToastHost = () => {
       {toasts.map(t => {
         const p = t.kind === 'success' ? { bg: T.success, fg: '#fff' } : t.kind === 'error' ? { bg: T.danger, fg: '#fff' } : { bg: T.ink900, fg: '#fff' };
         return (
-          <div key={t.id} className="rounded-xl px-4 py-3 text-sm font-medium flex items-center gap-2 shadow-lg" style={{ background: p.bg, color: p.fg, animation: 'toastIn 0.2s ease-out' }}>
+          <div key={t.id} className="rounded-xl px-4 py-3 text-sm font-medium flex items-center gap-2 shadow-lg pointer-events-auto" style={{ background: p.bg, color: p.fg, animation: 'toastIn 0.28s cubic-bezier(0.34, 1.56, 0.64, 1)' }}>
             {t.kind === 'success' && <Check size={14} />}
             {t.kind === 'error' && <AlertCircle size={14} />}
             <span>{t.text}</span>
@@ -607,8 +729,10 @@ const Navbar = ({ currentPage, user, viewRole, onSetViewRole, onNavigate, onLogo
   const isAdmin = user?.role === 'admin';
   const effectiveRole = isAdmin ? viewRole : (user?.role || 'client');
 
+  // Unread = messages from "the other side" that I haven't read yet
+  const myOtherSide = effectiveRole === 'provider' ? 'client' : 'provider';
   const unreadCount = Object.values(threads || {}).reduce((sum, msgs) =>
-    sum + (msgs || []).filter(m => m.from === 'provider' && !m.read).length, 0);
+    sum + (msgs || []).filter(m => m.from === myOtherSide && !m.read).length, 0);
   const pendingBookings = (bookings || []).filter(b => b.status === 'approved').length;
 
   const clientNav = [
@@ -618,10 +742,11 @@ const Navbar = ({ currentPage, user, viewRole, onSetViewRole, onNavigate, onLogo
     { id:'messages', label:'Inbox',    icon: MessageSquare, badge: unreadCount || null },
   ];
   const providerNav = [
-    { id:'dashboard',   label:'Dashboard', icon: LayoutDashboard },
-    { id:'prov-book',   label:'Bookings',  icon: CalendarIcon },
-    { id:'prov-wallet', label:'Wallet',    icon: Wallet },
-    { id:'prov-profile',label:'Profile',   icon: User },
+    { id:'dashboard',    label:'Dashboard', icon: LayoutDashboard },
+    { id:'prov-book',    label:'Bookings',  icon: CalendarIcon, badge: (bookings || []).filter(b => b.status === 'pending').length || null },
+    { id:'messages',     label:'Messages',  icon: MessageSquare, badge: unreadCount || null },
+    { id:'prov-wallet',  label:'Wallet',    icon: Wallet },
+    { id:'prov-profile', label:'Profile',   icon: User },
   ];
   const adminNav = [{ id:'admin', label:'Admin', icon: ShieldCheck }];
 
@@ -1247,18 +1372,28 @@ const PostCard = ({ post, providers, onBook, onBookCollab, onProvider }) => {
 // ============================================================
 // BOOKING MODAL
 // ============================================================
-const BookingModal = ({ provider, initialServiceId, onClose, onComplete }) => {
+const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSlots = [] }) => {
   const [step, setStep] = useState(0);
   const [serviceId, setServiceId] = useState(initialServiceId || provider?.services?.[0]?.id);
+  const [isCustom, setIsCustom] = useState(false);
+  const [customTitle, setCustomTitle] = useState('');
+  const [customDesc, setCustomDesc] = useState('');
+  const [customPrice, setCustomPrice] = useState('');
+  const [customDuration, setCustomDuration] = useState('60');
   const [locType, setLocType] = useState('client_home');
   const [selectedDate, setSelectedDate] = useState(null);
   const [slot, setSlot] = useState(null);
   if (!provider) return null;
-  const service = provider.services?.find(s => s.id === serviceId);
-  const slotsForDay = selectedDate ? getAvailableSlots(provider.id, selectedDate) : [];
-  const canContinue = step===0 ? !!serviceId : step===1 ? !!locType : step===2 ? (selectedDate && slot) : true;
+  const customValid = customTitle.trim().length >= 3 && customDesc.trim().length >= 10 && customPrice && Number(customPrice) > 0;
+  const service = isCustom
+    ? { id:'custom', title: customTitle.trim() || 'Custom request', duration: Number(customDuration) || 60, price: Number(customPrice) || 0, description: customDesc.trim(), isCustom: true, locType:'both' }
+    : provider.services?.find(s => s.id === serviceId);
+  const dayKey = selectedDate ? fmtDateKey(selectedDate) : null;
+  const takenForDay = dayKey ? takenSlots.filter(t => t.startsWith(dayKey + 'T')).map(t => t.split('T')[1]) : [];
+  const slotsForDay = (selectedDate ? getAvailableSlots(provider.id, selectedDate) : []).filter(t => !takenForDay.includes(t));
+  const canContinue = step===0 ? (isCustom ? customValid : !!serviceId) : step===1 ? !!locType : step===2 ? (selectedDate && slot) : true;
   const stepLabels = ['Service','Location','Time','Review'];
-  const next = () => step < 3 ? setStep(step+1) : onComplete({ service, locType, date: selectedDate, slot });
+  const next = () => step < 3 ? setStep(step+1) : onComplete({ service, locType, date: selectedDate, slot, isCustom });
   const prev = () => step > 0 ? setStep(step-1) : onClose();
   return (
     <Modal open onClose={onClose} maxWidth={600}>
@@ -1281,13 +1416,29 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete }) => {
             <h3 className="text-lg font-semibold mb-4" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Choose a service</h3>
             <div className="flex flex-col gap-2">
               {provider.services?.map(s => (
-                <button key={s.id} onClick={() => setServiceId(s.id)} className="text-left rounded-xl p-4" style={{ background:T.bgSurface, border:`2px solid ${serviceId===s.id ? T.primary : T.border}` }}>
+                <button key={s.id} onClick={() => { setIsCustom(false); setServiceId(s.id); }} className="text-left rounded-xl p-4" style={{ background:T.bgSurface, border:`2px solid ${!isCustom && serviceId===s.id ? T.primary : T.border}` }}>
                   <div className="flex items-start justify-between">
                     <div><div className="text-sm font-semibold" style={{ color:T.ink900 }}>{s.title}</div><div className="text-xs mt-0.5" style={{ color:T.ink500 }}>{s.duration} min · {s.locType === 'client_home' ? 'At your place' : s.locType === 'both' ? 'Flexible' : 'At studio'}</div></div>
                     <div className="text-base font-semibold" style={{ color:T.ink900 }}>QAR {s.price}</div>
                   </div>
                 </button>
               ))}
+              <button onClick={() => setIsCustom(true)} className="text-left rounded-xl p-4 flex items-center gap-3" style={{ background: isCustom ? T.bgSurface : 'transparent', border:`2px ${isCustom ? 'solid' : 'dashed'} ${isCustom ? T.accent : T.border}` }}>
+                <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: isCustom ? T.accent100 : T.bgMuted }}>
+                  <Sparkles size={16} style={{ color: isCustom ? T.accent600 : T.ink500 }}/>
+                </div>
+                <div><div className="text-sm font-semibold" style={{ color: isCustom ? T.ink900 : T.ink700 }}>Custom request</div><div className="text-xs" style={{ color:T.ink500 }}>Describe what you need and propose a price.</div></div>
+              </button>
+              {isCustom && (
+                <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background:T.accent100 + '55', border:`1px solid ${T.accent}33` }}>
+                  <div><label className="text-xs font-medium uppercase tracking-wider block mb-1" style={{ color:T.ink500 }}>What do you need?</label><input value={customTitle} onChange={e => setCustomTitle(e.target.value)} placeholder="e.g. Birthday party catering for 12" className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/></div>
+                  <div><label className="text-xs font-medium uppercase tracking-wider block mb-1" style={{ color:T.ink500 }}>Describe what you'd like</label><textarea value={customDesc} onChange={e => setCustomDesc(e.target.value)} rows={3} placeholder="Mediterranean menu, mostly vegetarian…" className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none resize-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/></div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className="text-xs font-medium uppercase tracking-wider block mb-1" style={{ color:T.ink500 }}>Duration (min)</label><input value={customDuration} onChange={e => setCustomDuration(e.target.value.replace(/\D/g,''))} className="w-full py-2.5 px-3.5 rounded-lg text-sm font-mono outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/></div>
+                    <div><label className="text-xs font-medium uppercase tracking-wider block mb-1" style={{ color:T.ink500 }}>Your offer (QAR)</label><input value={customPrice} onChange={e => setCustomPrice(e.target.value.replace(/\D/g,''))} placeholder="450" className="w-full py-2.5 px-3.5 rounded-lg text-sm font-mono outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/></div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1414,11 +1565,13 @@ const PaymentModal = ({ booking, onClose, onSuccess }) => {
 // ============================================================
 // RESCHEDULE MODAL
 // ============================================================
-const RescheduleModal = ({ booking, providers, onClose, onComplete }) => {
+const RescheduleModal = ({ booking, providers, onClose, onComplete, takenSlots = [] }) => {
   const provider = providers.find(p => p.id === booking?.providerId);
   const [selectedDate, setSelectedDate] = useState(null);
   const [slot, setSlot] = useState(null);
-  const slotsForDay = selectedDate && provider ? getAvailableSlots(provider.id, selectedDate) : [];
+  const dayKey = selectedDate ? fmtDateKey(selectedDate) : null;
+  const takenForDay = dayKey ? takenSlots.filter(t => t.startsWith(dayKey + 'T')).map(t => t.split('T')[1]) : [];
+  const slotsForDay = (selectedDate && provider ? getAvailableSlots(provider.id, selectedDate) : []).filter(t => !takenForDay.includes(t));
   if (!booking || !provider) return null;
   return (
     <Modal open onClose={onClose} title="Reschedule booking" maxWidth={520}>
@@ -1545,8 +1698,10 @@ const FeedPage = ({ providers, posts, onNavigate, onBook, onBookCollab }) => {
                 <div className="text-base font-semibold mb-1" style={{ color:T.ink900, fontFamily:'Fraunces,serif' }}>Nothing here yet</div>
                 <p className="text-sm" style={{ color:T.ink500 }}>Providers haven't posted any work yet. Check back soon, or <button onClick={() => onNavigate('explore')} className="font-medium" style={{ color:T.primary }}>browse experts directly</button>.</p>
               </div>
-            ) : posts.map(post => (
-              <PostCard key={post.id} post={post} providers={providers} onBook={onBook} onBookCollab={onBookCollab} onProvider={id => onNavigate('provider', { providerId: id })}/>
+            ) : posts.map((post, i) => (
+              <div key={post.id} style={{ animation: `fadeIn 0.4s ${i * 0.05}s both ease-out` }}>
+                <PostCard post={post} providers={providers} onBook={onBook} onBookCollab={onBookCollab} onProvider={id => onNavigate('provider', { providerId: id })}/>
+              </div>
             ))}
           </div>
         </div>
@@ -1649,14 +1804,31 @@ const ExplorePage = ({ providers, initialCat, onNavigate }) => {
           </div>
         </aside>
         <div className="flex-1">
-          <div className="relative mb-6">
+          <div className="relative mb-3">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color:T.ink500 }}/>
-            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search providers…" className="w-full pl-10 py-3 pr-3 rounded-xl text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search providers by name or specialty…" className="w-full pl-10 py-3 pr-10 rounded-xl text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${query ? T.primary : T.border}`, color:T.ink900 }}/>
+            {query && <button onClick={() => setQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full flex items-center justify-center" style={{ background:T.bgMuted }}><X size={12}/></button>}
+          </div>
+          <div className="flex items-center justify-between mb-4">
+            <div className="text-xs" style={{ color:T.ink500 }}>{filtered.length} provider{filtered.length === 1 ? '' : 's'} {query && `matching "${query}"`}</div>
+            {(query || sort !== 'recommended' || maxPrice < 700 || verifiedOnly) && (
+              <button onClick={() => { setQuery(''); setSort('recommended'); setMaxPrice(700); setVerifiedOnly(false); setCat('all'); }} className="text-xs font-medium" style={{ color:T.primary }}>Reset filters</button>
+            )}
           </div>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filtered.map(p => <ProviderCard key={p.id} provider={p} onClick={() => onNavigate('provider', { providerId: p.id })}/>)}
+            {filtered.map((p, i) => (
+              <div key={p.id} style={{ animation: `fadeIn 0.3s ${i * 0.03}s both ease-out` }}>
+                <ProviderCard provider={p} onClick={() => onNavigate('provider', { providerId: p.id })}/>
+              </div>
+            ))}
           </div>
-          {filtered.length === 0 && <div className="text-center py-16 rounded-2xl" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink500 }}>No providers match your filters.</div>}
+          {filtered.length === 0 && (
+            <div className="text-center py-16 rounded-2xl" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink500 }}>
+              <Search size={28} className="mx-auto mb-3" style={{ color:T.ink300 }}/>
+              <div className="text-sm font-medium mb-1" style={{ color:T.ink900 }}>No providers match your filters</div>
+              <div className="text-xs">Try widening price, removing the verified filter, or clearing your search.</div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1766,7 +1938,44 @@ const BookingsPage = ({ bookings, onNavigate, onPay, onCancel, onReschedule, pro
 // ============================================================
 // MESSAGES PAGE
 // ============================================================
-const MessagesPage = ({ bookings, threads, onSend, onMarkRead, initialBookingId }) => {
+// Phone/WhatsApp unlock button — visible 2h before the session
+const ContactButton = ({ booking }) => {
+  const [open, setOpen] = useState(false);
+  const unlocked = booking?.date && (new Date(booking.date).getTime() - Date.now() <= 2 * 3600 * 1000);
+  return (
+    <>
+      <Modal open={open} onClose={() => setOpen(false)} title="Direct contact" maxWidth={380}>
+        <div className="p-6 flex flex-col gap-3">
+          {unlocked ? (
+            <>
+              <p className="text-sm" style={{ color:T.ink500 }}>For safety, direct contact unlocks 2 hours before the session.</p>
+              <a href="tel:+97455443322" className="flex items-center gap-3 p-4 rounded-xl" style={{ background:T.bgMuted }}>
+                <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background:T.success }}><Phone size={18} color="#fff"/></div>
+                <div><div className="text-sm font-semibold" style={{ color:T.ink900 }}>Call</div><div className="text-xs" style={{ color:T.ink500 }}>+974 5544 3322</div></div>
+              </a>
+              <a href="https://wa.me/97455443322" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-4 rounded-xl" style={{ background:'#E7F9EF' }}>
+                <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background:'#25D366' }}><MessageSquare size={18} color="#fff"/></div>
+                <div><div className="text-sm font-semibold" style={{ color:T.ink900 }}>WhatsApp</div><div className="text-xs" style={{ color:T.ink500 }}>Chat on WhatsApp</div></div>
+              </a>
+            </>
+          ) : (
+            <div className="rounded-xl p-4 text-center" style={{ background:T.bgMuted }}>
+              <Clock size={24} className="mx-auto mb-2" style={{ color:T.ink300 }}/>
+              <div className="text-sm font-medium" style={{ color:T.ink900 }}>Not yet available</div>
+              <div className="text-xs mt-1" style={{ color:T.ink500 }}>Phone &amp; WhatsApp unlock 2 hours before:<br/><strong>{booking?.when || 'session'}</strong></div>
+            </div>
+          )}
+          <Btn variant="outline" onClick={() => setOpen(false)} className="w-full">Close</Btn>
+        </div>
+      </Modal>
+      <button onClick={() => setOpen(true)} className="w-8 h-8 rounded-full flex items-center justify-center hover:opacity-80" style={{ background:T.bgMuted }} title="Phone/WhatsApp">
+        <Phone size={14}/>
+      </button>
+    </>
+  );
+};
+
+const MessagesPage = ({ bookings, threads, onSend, onMarkRead, initialBookingId, me = 'client' }) => {
   const [activeId, setActiveId] = useState(initialBookingId || null);
   const [draft, setDraft] = useState('');
   const messagesEndRef = useRef(null);
@@ -1775,8 +1984,26 @@ const MessagesPage = ({ bookings, threads, onSend, onMarkRead, initialBookingId 
   const activeThread = activeId ? (threads[activeId] || []) : [];
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior:'smooth' }); }, [activeThread.length, activeId]);
   useEffect(() => { if (activeId) onMarkRead(activeId); }, [activeId]);
-  const send = () => { if (!draft.trim() || !activeId) return; onSend(activeId, draft.trim()); setDraft(''); };
-  const getUnread = (id) => (threads[id] || []).filter(m => m.from === 'provider' && !m.read).length;
+  const [pendingImage, setPendingImage] = useState(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const send = async () => {
+    if ((!draft.trim() && !pendingImage) || !activeId) return;
+    let imageUrl = null;
+    if (pendingImage) {
+      setUploadingImage(true);
+      try { imageUrl = await uploadToBucket('chat-attachments', pendingImage, activeId); }
+      catch (e) { showToast('Image upload failed', 'error'); setUploadingImage(false); return; }
+      setUploadingImage(false);
+    }
+    onSend(activeId, draft.trim(), imageUrl);
+    setDraft(''); setPendingImage(null);
+  };
+  // Unread = messages from the OTHER side that I haven't read
+  const otherSide = me === 'provider' ? 'client' : 'provider';
+  const getUnread = (id) => (threads[id] || []).filter(m => m.from === otherSide && !m.read).length;
+  // Header info — for client: show provider; for provider: show client
+  const peerName = (b) => me === 'provider' ? (b.clientName || 'Client') : b.providerName;
+  const peerCover = (b) => me === 'provider' ? 'deep-teal' : b.providerCover;
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
       <h1 className="text-2xl font-semibold mb-6" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Inbox</h1>
@@ -1793,15 +2020,15 @@ const MessagesPage = ({ bookings, threads, onSend, onMarkRead, initialBookingId 
               const unread = getUnread(b.id);
               return (
                 <button key={b.id} onClick={() => setActiveId(b.id)} className="w-full flex items-center gap-3 p-4 text-left border-b" style={{ borderColor:T.border, background: activeId===b.id ? T.primary100 : 'transparent' }}>
-                  <CoverArt tone={b.providerCover} className="w-11 h-11 rounded-full flex-shrink-0"/>
+                  <CoverArt tone={peerCover(b)} className="w-11 h-11 rounded-full flex-shrink-0"/>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-semibold truncate" style={{ color: activeId===b.id ? T.primary : T.ink900 }}>{b.providerName}</span>
+                      <span className="text-sm font-semibold truncate" style={{ color: activeId===b.id ? T.primary : T.ink900 }}>{peerName(b)}</span>
                       <span className="text-[10px] flex-shrink-0" style={{ color:T.ink500 }}>{last?.time || ''}</span>
                     </div>
                     <div className="text-[10px] truncate" style={{ color:T.accent600 }}>{b.serviceTitle}</div>
                     <div className="text-xs mt-0.5 truncate" style={{ color: unread ? T.ink900 : T.ink500, fontWeight: unread ? 500 : 400 }}>
-                      {last?.system ? last.text : last ? `${last.from==='client'?'You: ':''}${last.text}` : 'No messages yet'}
+                      {last?.system ? last.text : last ? `${last.from===me?'You: ':''}${last.text}` : 'No messages yet'}
                     </div>
                   </div>
                   {unread > 0 && <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0" style={{ background:T.accent }}>{unread}</div>}
@@ -1820,11 +2047,12 @@ const MessagesPage = ({ bookings, threads, onSend, onMarkRead, initialBookingId 
           ) : (
             <>
               <div className="flex items-center gap-3 p-4 border-b" style={{ borderColor:T.border }}>
-                <CoverArt tone={activeBooking.providerCover} className="w-9 h-9 rounded-full flex-shrink-0"/>
+                <CoverArt tone={peerCover(activeBooking)} className="w-9 h-9 rounded-full flex-shrink-0"/>
                 <div className="flex-1">
-                  <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{activeBooking.providerName}</div>
+                  <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{peerName(activeBooking)}</div>
                   <div className="text-xs" style={{ color:T.ink500 }}>{activeBooking.serviceTitle} · {activeBooking.when}</div>
                 </div>
+                <ContactButton booking={activeBooking}/>
               </div>
               <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
                 {activeThread.length === 0 && <div className="text-center text-xs py-4" style={{ color:T.ink500 }}>No messages yet. Say hello!</div>}
@@ -1836,20 +2064,41 @@ const MessagesPage = ({ bookings, threads, onSend, onMarkRead, initialBookingId 
                       </div>
                     </div>
                   );
-                  const mine = m.from === 'client';
+                  const mine = m.from === me;
                   return (
                     <div key={i} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                      <div className="max-w-[70%] px-3.5 py-2 rounded-2xl text-sm" style={{ background: mine ? T.primary : T.bgMuted, color: mine ? '#fff' : T.ink900 }}>{m.text}</div>
-                      <div className="text-[10px] mt-0.5 px-1" style={{ color:T.ink500 }}>{m.time}</div>
+                      {m.imageUrl && (
+                        <a href={m.imageUrl} target="_blank" rel="noopener noreferrer" className="max-w-[70%] mb-1 rounded-2xl overflow-hidden" style={{ border:`1px solid ${T.border}` }}>
+                          <img src={m.imageUrl} alt="" style={{ maxWidth:'100%', display:'block' }}/>
+                        </a>
+                      )}
+                      {m.text && (
+                        <div className="max-w-[70%] px-3.5 py-2 rounded-2xl text-sm" style={{ background: mine ? T.primary : T.bgMuted, color: mine ? '#fff' : T.ink900 }}>{m.text}</div>
+                      )}
+                      <div className="text-[10px] mt-0.5 px-1 flex items-center gap-1" style={{ color:T.ink500 }}>
+                        {m.time}
+                        {mine && (m.read ? <span className="flex items-center gap-0.5" style={{ color:T.primary }}><Check size={9}/><Check size={9} style={{ marginLeft:-5 }}/> Read</span> : <span>Delivered</span>)}
+                      </div>
                     </div>
                   );
                 })}
                 <div ref={messagesEndRef}/>
               </div>
+              {pendingImage && (
+                <div className="p-3 border-t flex items-center gap-3" style={{ borderColor:T.border, background:T.bgMuted }}>
+                  <img src={URL.createObjectURL(pendingImage)} alt="" className="w-12 h-12 rounded-lg object-cover"/>
+                  <div className="flex-1 text-xs" style={{ color:T.ink700 }}>{pendingImage.name}</div>
+                  <button onClick={() => setPendingImage(null)} className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background:T.bgSurface, color:T.danger }}><X size={13}/></button>
+                </div>
+              )}
               <div className="flex items-end gap-2 p-3 border-t" style={{ borderColor:T.border }}>
+                <label className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 cursor-pointer" style={{ background:T.bgMuted, color:T.ink700 }} title="Attach image">
+                  <Camera size={15}/>
+                  <input type="file" accept="image/*" className="hidden" onChange={e => setPendingImage(e.target.files?.[0] || null)}/>
+                </label>
                 <textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="Type a message…" rows={1} className="flex-1 py-2 px-3 rounded-xl text-sm outline-none resize-none" style={{ background:T.bgMuted, color:T.ink900 }}/>
-                <button onClick={send} disabled={!draft.trim()} className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 disabled:opacity-30" style={{ background:T.primary }}>
-                  <Send size={15} color="#fff"/>
+                <button onClick={send} disabled={(!draft.trim() && !pendingImage) || uploadingImage} className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 disabled:opacity-30" style={{ background:T.primary }}>
+                  {uploadingImage ? <Clock size={15} color="#fff"/> : <Send size={15} color="#fff"/>}
                 </button>
               </div>
             </>
@@ -1863,7 +2112,31 @@ const MessagesPage = ({ bookings, threads, onSend, onMarkRead, initialBookingId 
 // ============================================================
 // PROFILE PAGE
 // ============================================================
-const ProfilePage = ({ user, onNavigate, onLogout, onSwitchRole, providers }) => {
+const ProfilePage = ({ user, onNavigate, onLogout, onSwitchRole, providers, favorites, follows, onFavoritesChange, onFollowsChange, onUserChange }) => {
+  const [editProfileOpen, setEditProfileOpen] = useState(false);
+  const [addressesOpen, setAddressesOpen] = useState(false);
+  const [paymentMethodsOpen, setPaymentMethodsOpen] = useState(false);
+  const [favoritesOpen, setFavoritesOpen] = useState(false);
+  const [followingOpen, setFollowingOpen] = useState(false);
+  const [notifsOpen, setNotifsOpen] = useState(false);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  return <ProfilePageInner
+    user={user} onNavigate={onNavigate} onLogout={onLogout} onSwitchRole={onSwitchRole} providers={providers}
+    favorites={favorites} follows={follows} onFavoritesChange={onFavoritesChange} onFollowsChange={onFollowsChange}
+    onUserChange={onUserChange}
+    editProfileOpen={editProfileOpen} setEditProfileOpen={setEditProfileOpen}
+    addressesOpen={addressesOpen} setAddressesOpen={setAddressesOpen}
+    paymentMethodsOpen={paymentMethodsOpen} setPaymentMethodsOpen={setPaymentMethodsOpen}
+    favoritesOpen={favoritesOpen} setFavoritesOpen={setFavoritesOpen}
+    followingOpen={followingOpen} setFollowingOpen={setFollowingOpen}
+    notifsOpen={notifsOpen} setNotifsOpen={setNotifsOpen}
+    privacyOpen={privacyOpen} setPrivacyOpen={setPrivacyOpen}
+  />;
+};
+
+const ProfilePageInner = ({ user, onNavigate, onLogout, onSwitchRole, providers, favorites, follows, onFavoritesChange, onFollowsChange, onUserChange,
+  editProfileOpen, setEditProfileOpen, addressesOpen, setAddressesOpen, paymentMethodsOpen, setPaymentMethodsOpen,
+  favoritesOpen, setFavoritesOpen, followingOpen, setFollowingOpen, notifsOpen, setNotifsOpen, privacyOpen, setPrivacyOpen }) => {
   const [becomeProviderOpen, setBecomeProviderOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
   const isProvider = user?.role === 'provider';
@@ -1910,6 +2183,13 @@ const ProfilePage = ({ user, onNavigate, onLogout, onSwitchRole, providers }) =>
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 grid md:grid-cols-[240px_1fr] gap-8">
       <BecomeProviderModal open={becomeProviderOpen} onClose={() => setBecomeProviderOpen(false)} user={user} onDone={() => onSwitchRole('provider')}/>
+      <EditClientProfileModal open={editProfileOpen} onClose={() => setEditProfileOpen(false)} user={user} onSaved={onUserChange}/>
+      <SavedAddressesModal open={addressesOpen} onClose={() => setAddressesOpen(false)} user={user}/>
+      <PaymentMethodsModal open={paymentMethodsOpen} onClose={() => setPaymentMethodsOpen(false)} user={user}/>
+      <FavoritesModal open={favoritesOpen} onClose={() => setFavoritesOpen(false)} user={user} providers={providers} onNavigate={onNavigate} favorites={favorites} onFavoritesChange={onFavoritesChange}/>
+      <FollowingModal open={followingOpen} onClose={() => setFollowingOpen(false)} user={user} providers={providers} onNavigate={onNavigate} follows={follows} onFollowsChange={onFollowsChange}/>
+      <NotificationsModal open={notifsOpen} onClose={() => setNotifsOpen(false)} user={user}/>
+      <PrivacyModal open={privacyOpen} onClose={() => setPrivacyOpen(false)} user={user} onAccountDeleted={onLogout}/>
 
       <div>
         <div className="rounded-2xl p-6 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
@@ -1965,7 +2245,7 @@ const ProfilePage = ({ user, onNavigate, onLogout, onSwitchRole, providers }) =>
           )}
         </div>
 
-        <div className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        <div className="rounded-2xl p-5 mb-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
           <h2 className="text-base font-semibold mb-4" style={{ color:T.ink900 }}>Quick actions</h2>
           <div className="grid grid-cols-2 gap-3">
             {actions.map((a,i) => (
@@ -1976,6 +2256,26 @@ const ProfilePage = ({ user, onNavigate, onLogout, onSwitchRole, providers }) =>
             ))}
           </div>
         </div>
+
+        {/* SETTINGS GRID — all v2 modals */}
+        <div className="rounded-2xl overflow-hidden" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          <h2 className="text-base font-semibold p-5 pb-3" style={{ color:T.ink900 }}>Settings</h2>
+          {[
+            { icon: User, label:'Edit profile', sub:'Name, phone, photo, city', onClick: () => setEditProfileOpen(true) },
+            { icon: MapPin, label:'Saved addresses', sub:'For at-home services', onClick: () => setAddressesOpen(true) },
+            { icon: CreditCard, label:'Payment methods', sub:'Saved cards', onClick: () => setPaymentMethodsOpen(true) },
+            { icon: Heart, label:'Saved providers', sub:`${(favorites || []).length} saved`, onClick: () => setFavoritesOpen(true) },
+            { icon: Users, label:'Following', sub:`${(follows || []).length} providers`, onClick: () => setFollowingOpen(true) },
+            { icon: Bell, label:'Notifications', sub:'Email & in-app preferences', onClick: () => setNotifsOpen(true) },
+            { icon: ShieldCheck, label:'Privacy & data', sub:'Visibility & PDPL rights', onClick: () => setPrivacyOpen(true) },
+          ].map((it, i, arr) => (
+            <button key={i} onClick={it.onClick} className="w-full flex items-center gap-3 p-4 text-left hover:bg-gray-50" style={{ borderTop: `1px solid ${T.border}` }}>
+              <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background:T.bgMuted }}><it.icon size={15} style={{ color:T.ink700 }}/></div>
+              <div className="flex-1"><div className="text-sm font-medium" style={{ color:T.ink900 }}>{it.label}</div><div className="text-xs" style={{ color:T.ink500 }}>{it.sub}</div></div>
+              <ChevronRight size={14} style={{ color:T.ink300 }}/>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1984,10 +2284,38 @@ const ProfilePage = ({ user, onNavigate, onLogout, onSwitchRole, providers }) =>
 // ============================================================
 // PROVIDER DASHBOARD
 // ============================================================
-const ProviderDashboard = ({ user, providers, onRefreshPosts }) => {
+const ProviderDashboard = ({ user, providers, bookings, onRefreshPosts, onNavigate }) => {
   const me = providers.find(p => p.id === user?.providerId);
   const isPending = me?.status === 'pending';
   const [postOpen, setPostOpen] = useState(false);
+
+  // Real stats derived from bookings
+  const myBookings = bookings.filter(b => b.providerId === user?.providerId);
+  const isSameDay = (a, b) => a && b && new Date(a).toDateString() === new Date(b).toDateString();
+  const today = new Date();
+  const todayBookings = myBookings.filter(b => isSameDay(b.date, today));
+  const pendingRequests = myBookings.filter(b => b.status === 'pending');
+  const completedThisMonth = myBookings.filter(b => {
+    const d = new Date(b.date);
+    return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear() && b.status === 'completed';
+  });
+  const monthRevenue = completedThisMonth.reduce((s, b) => s + (Number(b.total) || 0) * 0.88, 0);
+
+  // Last 7 days for the bar chart
+  const last7 = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today); d.setDate(d.getDate() - (6 - i)); return d;
+  });
+  const weekData = last7.map(d => ({
+    date: d,
+    earnings: myBookings.filter(b => isSameDay(b.date, d) && b.status === 'completed').reduce((s, b) => s + (Number(b.total) || 0) * 0.88, 0),
+  }));
+  const weekTotal = weekData.reduce((s, w) => s + w.earnings, 0);
+  const maxBar = Math.max(...weekData.map(w => w.earnings), 1);
+
+  const todayUpcoming = todayBookings
+    .filter(b => ['approved', 'confirmed'].includes(b.status))
+    .sort((a, b) => (a.slot || '').localeCompare(b.slot || ''));
+
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
       <NewPostModal open={postOpen} onClose={() => setPostOpen(false)} user={user} providers={providers} onPosted={onRefreshPosts}/>
@@ -2005,7 +2333,12 @@ const ProviderDashboard = ({ user, providers, onRefreshPosts }) => {
         </div>
       )}
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        {[{label:"Today's bookings",value:'0',icon:CalendarIcon,tone:'primary'},{label:'Pending requests',value:'0',icon:Zap,tone:'accent'},{label:'This month',value:'QAR 0',icon:Wallet,tone:'primary'},{label:'Rating',value:me?.rating ? `${me.rating} ★` : 'New',icon:Star,tone:'accent'}].map((k,i) => (
+        {[
+          { label:"Today's bookings", value: todayBookings.length, icon: CalendarIcon, tone:'primary' },
+          { label:'Pending requests', value: pendingRequests.length, icon: Zap, tone:'accent' },
+          { label:'This month', value: `QAR ${Math.round(monthRevenue).toLocaleString()}`, icon: Wallet, tone:'primary' },
+          { label:'Rating', value: me?.rating > 0 ? `${me.rating.toFixed(1)} ★` : 'New', icon: Star, tone:'accent' },
+        ].map((k,i) => (
           <div key={i} className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
             <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ background: k.tone==='primary' ? T.primary100 : T.accent100 }}>
               <k.icon size={18} style={{ color: k.tone==='primary' ? T.primary : T.accent600 }}/>
@@ -2015,10 +2348,53 @@ const ProviderDashboard = ({ user, providers, onRefreshPosts }) => {
           </div>
         ))}
       </div>
-      <div className="rounded-2xl p-8 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
-        <Sparkles size={28} className="mx-auto mb-3" style={{ color:T.accent }}/>
-        <div className="font-semibold mb-1" style={{ color:T.ink900 }}>Welcome to toBayt</div>
-        <div className="text-sm" style={{ color:T.ink500 }}>Your dashboard will populate as bookings come in.</div>
+
+      <div className="grid lg:grid-cols-2 gap-6">
+        {/* Weekly earnings chart */}
+        <div>
+          <h2 className="text-base font-semibold mb-4" style={{ color:T.ink900 }}>This week's earnings</h2>
+          <div className="rounded-2xl p-6" style={{ background:T.primary, color:'#fff' }}>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-sm opacity-70">QAR</span>
+              <span className="text-4xl font-semibold" style={{ fontFamily:'Fraunces,serif' }}>{Math.round(weekTotal).toLocaleString()}</span>
+            </div>
+            <div className="text-sm mt-1 opacity-80">{completedThisMonth.length} sessions completed this month</div>
+            <div className="mt-5 flex gap-1 h-20 items-end">
+              {weekData.map((d, i) => (
+                <div key={i} className="flex-1 rounded-t" style={{ background: i===6 ? T.accent : 'rgba(255,255,255,0.3)', height:`${Math.max((d.earnings / maxBar) * 100, 4)}%` }} title={`${DAY_NAMES[d.date.getDay()]}: QAR ${Math.round(d.earnings)}`}/>
+              ))}
+            </div>
+            <div className="mt-2 grid grid-cols-7 gap-1">
+              {weekData.map((d, i) => <div key={i} className="text-center text-[10px] opacity-60">{DAY_NAMES[d.date.getDay()][0]}</div>)}
+            </div>
+          </div>
+          {pendingRequests.length > 0 && (
+            <button onClick={() => onNavigate('prov-book')} className="w-full mt-4 rounded-2xl p-4 text-left flex items-center gap-3 hover:shadow-md transition-shadow" style={{ background:T.accent100, border:`1px solid ${T.accent+'33'}` }}>
+              <Zap size={18} style={{ color:T.accent600 }}/>
+              <div className="flex-1">
+                <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{pendingRequests.length} pending request{pendingRequests.length === 1 ? '' : 's'}</div>
+                <div className="text-xs" style={{ color:T.ink700 }}>Tap to review and accept</div>
+              </div>
+              <ChevronRight size={16} style={{ color:T.accent600 }}/>
+            </button>
+          )}
+        </div>
+
+        {/* Today's upcoming */}
+        <div>
+          <h2 className="text-base font-semibold mb-4" style={{ color:T.ink900 }}>Upcoming today</h2>
+          <div className="rounded-2xl p-4" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+            {todayUpcoming.length === 0 ? (
+              <div className="text-center py-8 text-sm" style={{ color:T.ink500 }}>No sessions today. Enjoy the break.</div>
+            ) : todayUpcoming.map((b, i, arr) => (
+              <div key={b.id} className="flex items-center gap-3 py-3" style={{ borderBottom: i<arr.length-1 ? `1px solid ${T.border}` : 'none' }}>
+                <div className="w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-semibold" style={{ background:T.accent, fontFamily:'Fraunces,serif' }}>{(b.clientName || 'C')[0].toUpperCase()}</div>
+                <div className="flex-1"><div className="text-sm font-semibold" style={{ color:T.ink900 }}>{b.clientName || 'Client'}</div><div className="text-xs" style={{ color:T.ink500 }}>{b.serviceTitle}</div></div>
+                <div className="font-mono text-sm font-semibold" style={{ color:T.ink900 }}>{b.slot}</div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -2027,55 +2403,215 @@ const ProviderDashboard = ({ user, providers, onRefreshPosts }) => {
 // ============================================================
 // PROVIDER BOOKINGS PAGE
 // ============================================================
-const ProviderBookingsPage = ({ bookings }) => (
-  <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
-    <h1 className="text-2xl font-semibold mb-6" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Bookings</h1>
-    {bookings.length === 0 && (
-      <div className="rounded-2xl p-12 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
-        <CalendarIcon size={32} className="mx-auto mb-3" style={{ color:T.ink300 }}/>
-        <div className="text-sm" style={{ color:T.ink500 }}>No bookings yet. Once approved, clients can book you.</div>
+const ProviderBookingsPage = ({ bookings, onAccept, onDecline, onComplete, onNavigate }) => {
+  const [tab, setTab] = useState('pending');
+  const pending = bookings.filter(b => b.status === 'pending');
+  const upcoming = bookings.filter(b => ['approved','confirmed'].includes(b.status));
+  const past = bookings.filter(b => ['completed','cancelled','rejected'].includes(b.status));
+  const list = tab === 'pending' ? pending : tab === 'upcoming' ? upcoming : past;
+  return (
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
+      <h1 className="text-2xl font-semibold mb-6" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Bookings</h1>
+      <div className="flex gap-1 p-1 rounded-xl w-fit mb-6" style={{ background:T.bgMuted }}>
+        {[
+          {id:'pending', label:`Pending (${pending.length})`},
+          {id:'upcoming', label:`Upcoming (${upcoming.length})`},
+          {id:'past', label:`Past (${past.length})`}
+        ].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} className="px-5 py-2 rounded-lg text-sm font-medium" style={{ background: tab===t.id ? T.bgSurface : 'transparent', color: tab===t.id ? T.ink900 : T.ink500 }}>{t.label}</button>
+        ))}
       </div>
-    )}
-    <div className="flex flex-col gap-3">
-      {bookings.map(b => (
-        <div key={b.id} className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold" style={{ background:T.primary, fontFamily:'Fraunces,serif' }}>C</div>
-            <div className="flex-1">
-              <div className="font-semibold" style={{ color:T.ink900 }}>Client</div>
-              <div className="text-sm" style={{ color:T.ink500 }}>{b.serviceTitle}</div>
-              <div className="text-sm mt-0.5" style={{ color:T.ink700 }}>{b.when} · <strong style={{ color:T.ink900 }}>QAR {b.total}</strong></div>
-            </div>
-            <StatusBadge status={b.status}/>
+      {list.length === 0 && (
+        <div className="rounded-2xl p-12 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          <CalendarIcon size={32} className="mx-auto mb-3" style={{ color:T.ink300 }}/>
+          <div className="text-sm" style={{ color:T.ink500 }}>
+            {tab === 'pending' ? 'No pending requests right now.'
+              : tab === 'upcoming' ? 'No upcoming bookings.'
+              : 'No past bookings.'}
           </div>
         </div>
-      ))}
+      )}
+      <div className="flex flex-col gap-3">
+        {list.map(b => {
+          const clientLabel = b.clientName || 'Client';
+          return (
+            <div key={b.id} className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold" style={{ background:T.primary, fontFamily:'Fraunces,serif' }}>{clientLabel[0].toUpperCase()}</div>
+                <div className="flex-1">
+                  <div className="font-semibold" style={{ color:T.ink900 }}>{clientLabel}</div>
+                  <div className="text-sm" style={{ color:T.ink500 }}>{b.serviceTitle}</div>
+                  <div className="text-sm mt-0.5" style={{ color:T.ink700 }}>{b.when} · <strong style={{ color:T.ink900 }}>QAR {b.total}</strong></div>
+                </div>
+                <StatusBadge status={b.status}/>
+              </div>
+              <div className="mt-3 flex gap-2 flex-wrap">
+                {b.status === 'pending' && (
+                  <>
+                    <Btn size="sm" leadingIcon={Check} onClick={() => onAccept(b.id)}>Accept</Btn>
+                    <Btn size="sm" variant="outline" leadingIcon={X} onClick={() => onDecline(b.id)}>Decline</Btn>
+                  </>
+                )}
+                {b.status === 'confirmed' && (
+                  <Btn size="sm" leadingIcon={Check} onClick={() => onComplete(b.id)}>Mark completed</Btn>
+                )}
+                <Btn size="sm" variant="outline" leadingIcon={MessageSquare} onClick={() => onNavigate('messages', { bookingId: b.id })}>Message client</Btn>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ============================================================
 // PROVIDER WALLET
 // ============================================================
-const ProviderWalletPage = () => (
-  <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
-    <h1 className="text-2xl font-semibold mb-6" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Wallet</h1>
-    <div className="rounded-2xl p-8 mb-6" style={{ background:T.primary, color:'#fff' }}>
-      <div className="text-sm opacity-70 mb-2">Available balance</div>
-      <div className="text-5xl font-semibold mb-1" style={{ fontFamily:'Fraunces,serif' }}>0</div>
-      <div className="text-sm opacity-70 mb-6">QAR</div>
-      <div className="flex gap-3">
-        <button onClick={() => showToast('No funds to withdraw yet')} className="px-5 py-2.5 rounded-lg text-sm font-medium" style={{ background:T.bgSurface, color:T.primary }}>Withdraw</button>
-        <button onClick={() => showToast('No transactions yet')} className="px-5 py-2.5 rounded-lg text-sm font-medium" style={{ background:'rgba(255,255,255,0.15)', color:'#fff' }}>Statement</button>
+const WithdrawModal = ({ open, onClose, balance, onWithdraw }) => {
+  const [amount, setAmount] = useState('');
+  const [bank, setBank] = useState('qnb');
+  const [processing, setProcessing] = useState(false);
+  const banks = [
+    {id:'qnb', label:'QNB ···· 4521', sub:'Qatar National Bank'},
+    {id:'cbq', label:'CBQ ···· 8833', sub:'Commercial Bank of Qatar'},
+    {id:'doha', label:'Doha Bank ···· 2210', sub:'Doha Bank'},
+  ];
+  const amt = Number(amount);
+  const valid = amt >= 50 && amt <= balance;
+  const submit = async () => {
+    if (!valid) return;
+    setProcessing(true);
+    try {
+      await onWithdraw(amt, banks.find(b => b.id===bank)?.label);
+      setAmount('');
+      onClose();
+    } catch (e) { showToast('Withdrawal failed: ' + e.message, 'error'); }
+    setProcessing(false);
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Withdraw funds" maxWidth={440}>
+      <div className="p-6 flex flex-col gap-4">
+        <div className="rounded-xl p-4 text-center" style={{ background:T.primary }}>
+          <div className="text-xs opacity-70 mb-1 text-white">Available balance</div>
+          <div className="text-3xl font-semibold text-white font-mono">QAR {balance.toLocaleString()}</div>
+        </div>
+        <div>
+          <label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Amount (min QAR 50)</label>
+          <input value={amount} onChange={e => setAmount(e.target.value.replace(/\D/g,''))} placeholder="Enter amount" className="w-full py-3 px-4 rounded-xl text-lg font-mono outline-none text-center" style={{ background:T.bgMuted, border:`2px solid ${amount && !valid ? T.danger : amount && valid ? T.success : T.border}`, color:T.ink900 }}/>
+          <div className="flex gap-2 mt-2">
+            {[500,1000,2000].map(v => <button key={v} onClick={() => setAmount(String(Math.min(v,balance)))} className="flex-1 py-1.5 rounded-lg text-xs font-medium" style={{ background:T.primary100, color:T.primary }} disabled={v > balance}>QAR {v}</button>)}
+            <button onClick={() => setAmount(String(balance))} className="flex-1 py-1.5 rounded-lg text-xs font-medium" style={{ background:T.bgMuted, color:T.ink700 }}>All</button>
+          </div>
+        </div>
+        <div>
+          <label className="text-xs font-medium uppercase tracking-wider mb-2 block" style={{ color:T.ink500 }}>To bank account</label>
+          <div className="flex flex-col gap-1.5">
+            {banks.map(b => (
+              <button key={b.id} onClick={() => setBank(b.id)} className="text-left rounded-xl p-3 flex items-center gap-3" style={{ background:T.bgMuted, border:`2px solid ${bank===b.id ? T.primary : 'transparent'}` }}>
+                <div className="w-10 h-7 rounded flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0" style={{ background:T.primary }}>{b.id.toUpperCase()}</div>
+                <div className="flex-1"><div className="text-sm font-medium" style={{ color:T.ink900 }}>{b.label}</div><div className="text-xs" style={{ color:T.ink500 }}>{b.sub}</div></div>
+                {bank===b.id && <Check size={14} style={{ color:T.primary }}/>}
+              </button>
+            ))}
+          </div>
+        </div>
+        {amount && !valid && <p className="text-xs" style={{ color:T.danger }}>{amt < 50 ? 'Minimum is QAR 50' : 'Exceeds available balance'}</p>}
+        <Btn size="lg" className="w-full" disabled={!valid || processing} onClick={submit}>{processing ? 'Processing…' : valid ? `Withdraw QAR ${amt}` : 'Enter amount'}</Btn>
+      </div>
+    </Modal>
+  );
+};
+
+const ProviderWalletPage = ({ user, bookings }) => {
+  const [txns, setTxns] = useState([]);
+  const [withdrawOpen, setWithdrawOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const providerId = user?.providerId;
+
+  const reload = async () => {
+    if (!providerId) { setLoading(false); return; }
+    setLoading(true);
+    setTxns(await fetchTransactions(providerId));
+    setLoading(false);
+  };
+  useEffect(() => { reload(); }, [providerId]);
+
+  // Compute balance: completed booking earnings (88% net) minus withdrawals
+  const completedBookings = bookings.filter(b => b.providerId === providerId && b.status === 'completed');
+  const totalEarned = completedBookings.reduce((s, b) => s + (Number(b.total) || 0) * 0.88, 0);
+  const totalWithdrawn = txns.filter(t => t.kind === 'withdrawal').reduce((s, t) => s + Number(t.amount), 0);
+  const balance = Math.max(0, totalEarned - totalWithdrawn);
+
+  // This-month + pending stats
+  const today = new Date();
+  const thisMonth = completedBookings.filter(b => {
+    const d = new Date(b.date);
+    return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
+  }).reduce((s, b) => s + (Number(b.total) || 0) * 0.88, 0);
+  const pending = bookings.filter(b => b.providerId === providerId && ['approved','confirmed'].includes(b.status)).reduce((s, b) => s + (Number(b.total) || 0) * 0.88, 0);
+
+  const handleWithdraw = async (amt, bankLabel) => {
+    await addTransaction(providerId, 'withdrawal', amt, `Withdrawal to ${bankLabel}`);
+    reload();
+    showToast(`QAR ${amt} withdrawal initiated`, 'success');
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
+      <WithdrawModal open={withdrawOpen} onClose={() => setWithdrawOpen(false)} balance={Math.round(balance)} onWithdraw={handleWithdraw}/>
+      <h1 className="text-2xl font-semibold mb-6" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Wallet</h1>
+      <div className="rounded-2xl p-8 mb-6" style={{ background:T.primary, color:'#fff' }}>
+        <div className="text-sm opacity-70 mb-2">Available balance</div>
+        <div className="text-5xl font-semibold mb-1" style={{ fontFamily:'Fraunces,serif' }}>{Math.round(balance).toLocaleString()}</div>
+        <div className="text-sm opacity-70 mb-6">QAR</div>
+        <div className="flex gap-3">
+          <button onClick={() => balance >= 50 ? setWithdrawOpen(true) : showToast('Min withdrawal is QAR 50')} className="px-5 py-2.5 rounded-lg text-sm font-medium" style={{ background:T.bgSurface, color:T.primary, opacity: balance >= 50 ? 1 : 0.6 }}>Withdraw</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        {[
+          {label:'This month', value:`QAR ${Math.round(thisMonth).toLocaleString()}`, color:T.ink900},
+          {label:'Pending (in upcoming bookings)', value:`QAR ${Math.round(pending).toLocaleString()}`, color:T.accent600},
+          {label:'Withdrawn (lifetime)', value:`QAR ${Math.round(totalWithdrawn).toLocaleString()}`, color:T.ink500},
+        ].map((s, i) => (
+          <div key={i} className="rounded-2xl p-4" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+            <div className="text-xs" style={{ color:T.ink500 }}>{s.label}</div>
+            <div className="text-lg font-semibold font-mono mt-1" style={{ color:s.color }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+      <div className="rounded-2xl overflow-hidden" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        <div className="px-5 py-3 border-b" style={{ borderColor:T.border }}><h2 className="text-sm font-semibold" style={{ color:T.ink900 }}>Recent transactions</h2></div>
+        {loading ? <div className="p-8 text-center text-sm" style={{ color:T.ink500 }}>Loading…</div>
+          : txns.length === 0 && completedBookings.length === 0 ? (
+            <div className="p-8 text-center text-sm" style={{ color:T.ink500 }}>No transactions yet. Once clients pay and you complete bookings, earnings appear here.</div>
+          ) : (
+            <>
+              {completedBookings.slice(0, 10).map((b, i) => (
+                <div key={'b-' + b.id} className="flex items-center gap-3 px-5 py-4 border-b" style={{ borderColor:T.border }}>
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background:'#E0F2E7' }}>
+                    <TrendingUp size={14} style={{ color:T.success }}/>
+                  </div>
+                  <div className="flex-1"><div className="text-sm font-medium" style={{ color:T.ink900 }}>{b.serviceTitle} · {b.clientName || 'client'}</div><div className="text-xs" style={{ color:T.ink500 }}>{b.when}</div></div>
+                  <div className="font-mono font-semibold" style={{ color:T.success }}>+{Math.round((Number(b.total) || 0) * 0.88)}</div>
+                </div>
+              ))}
+              {txns.map((t, i) => (
+                <div key={t.id} className="flex items-center gap-3 px-5 py-4 border-b last:border-b-0" style={{ borderColor:T.border }}>
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: t.kind==='withdrawal' ? T.bgMuted : '#E0F2E7' }}>
+                    <TrendingUp size={14} style={{ color: t.kind==='withdrawal' ? T.ink500 : T.success, transform: t.kind==='withdrawal' ? 'rotate(180deg)' : 'none' }}/>
+                  </div>
+                  <div className="flex-1"><div className="text-sm font-medium" style={{ color:T.ink900 }}>{t.description}</div><div className="text-xs" style={{ color:T.ink500 }}>{new Date(t.created_at).toLocaleDateString()}</div></div>
+                  <div className="font-mono font-semibold" style={{ color: t.kind==='withdrawal' ? T.ink900 : T.success }}>{t.kind==='withdrawal' ? '−' : '+'}{Math.round(Number(t.amount))}</div>
+                </div>
+              ))}
+            </>
+          )}
       </div>
     </div>
-    <div className="rounded-2xl p-8 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
-      <Wallet size={28} className="mx-auto mb-3" style={{ color:T.ink300 }}/>
-      <div className="font-semibold mb-1" style={{ color:T.ink900 }}>No transactions yet</div>
-      <div className="text-sm" style={{ color:T.ink500 }}>Once clients book and pay, earnings will appear here.</div>
-    </div>
-  </div>
-);
+  );
+};
 
 // ============================================================
 // PROVIDER PROFILE (provider's own profile editor)
@@ -2212,29 +2748,353 @@ const ProviderProfilePage = ({ user, providers, onProviderUpdate, onNavigate }) 
           </div>
         </div>
       </div>
-      <div className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
-        <h2 className="text-base font-semibold mb-3" style={{ color:T.ink900 }}>Your services</h2>
-        <div className="flex flex-col gap-2">
-          {me.services?.map(s => (
-            <div key={s.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background:T.bgMuted }}>
-              <div><div className="text-sm font-semibold" style={{ color:T.ink900 }}>{s.title}</div><div className="text-xs" style={{ color:T.ink500 }}>{s.duration} min</div></div>
-              <div className="text-sm font-semibold" style={{ color:T.ink900 }}>QAR {s.price}</div>
+      <ProviderProfileTabs me={me} user={user} onProviderUpdate={updated => { onProviderUpdate(updated); setFetched(updated); }} onNavigate={onNavigate}/>
+    </div>
+  );
+};
+
+// Collabs tab — provider can create bundles with other providers
+const CollabsTab = ({ me, isOwner }) => {
+  const [collabs, setCollabs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [allProviders, setAllProviders] = useState([]);
+  const [newOpen, setNewOpen] = useState(false);
+  const reload = async () => {
+    setLoading(true);
+    const list = await fetchCollabsForProvider(me.id);
+    setCollabs(list);
+    setLoading(false);
+  };
+  useEffect(() => { reload(); }, [me.id]);
+  useEffect(() => {
+    sb.from('providers').select('*').eq('status', 'approved').neq('id', me.id).then(({ data }) => {
+      setAllProviders((data || []).map(mapProvider));
+    });
+  }, [me.id]);
+  const handleDelete = async (id) => { await deleteCollab(id); reload(); showToast('Collab removed'); };
+  return (
+    <>
+      <NewCollabModal open={newOpen} onClose={() => setNewOpen(false)} me={me} providers={allProviders} onCreated={() => reload()}/>
+      {loading ? <div className="text-center py-12 text-sm" style={{ color:T.ink500 }}>Loading collabs…</div>
+        : collabs.length === 0 ? (
+          <div className="rounded-2xl p-12 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+            <Sparkles size={28} className="mx-auto mb-3" style={{ color:T.accent }}/>
+            <div className="text-sm font-medium mb-1" style={{ color:T.ink900 }}>No collabs yet</div>
+            <div className="text-xs mb-4" style={{ color:T.ink500 }}>Team up with another provider to offer a discounted bundle (e.g. trainer + nutritionist).</div>
+            {isOwner && <Btn size="sm" variant="secondary" leadingIcon={Plus} onClick={() => setNewOpen(true)}>Create your first collab</Btn>}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {collabs.map(c => {
+              const partnerId = c.provider_a_id === me.id ? c.provider_b_id : c.provider_a_id;
+              const partner = allProviders.find(p => p.id === partnerId);
+              const saving = (c.regular_price || 0) - (c.bundle_price || 0);
+              return (
+                <div key={c.id} className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+                  <div className="flex items-start gap-3 mb-3">
+                    <div className="flex items-center">
+                      <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold z-10" style={{ background:T.primary, fontFamily:'Fraunces,serif' }}>{me.name[0]}</div>
+                      <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold -ml-3 ring-2 ring-white" style={{ background:T.accent, fontFamily:'Fraunces,serif' }}>{(partner?.name || '?')[0]}</div>
+                    </div>
+                    <div className="flex-1"><div className="font-semibold" style={{ color:T.ink900 }}>{me.name} × {partner?.name || 'Partner'}</div><div className="text-xs" style={{ color:T.ink500 }}>{me.specialty}{partner ? ` + ${partner.specialty}` : ''}</div></div>
+                    <Pill bg={c.status === 'active' ? '#E0F2E7' : T.bgMuted} color={c.status === 'active' ? T.success : T.ink500}>{c.status}</Pill>
+                  </div>
+                  <div className="font-medium mb-1" style={{ color:T.ink900 }}>{c.title}</div>
+                  <p className="text-xs mb-3" style={{ color:T.ink700 }}>{c.description}</p>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-xs line-through" style={{ color:T.ink500 }}>QAR {c.regular_price}</span>
+                      <span className="text-lg font-semibold" style={{ color:T.ink900 }}>QAR {c.bundle_price}</span>
+                      {saving > 0 && <Pill bg={T.success} color="#fff">Save QAR {saving}</Pill>}
+                    </div>
+                    {isOwner && <Btn size="sm" variant="ghost" onClick={() => handleDelete(c.id)} style={{ color:T.danger }}>Remove</Btn>}
+                  </div>
+                </div>
+              );
+            })}
+            {isOwner && (
+              <button onClick={() => setNewOpen(true)} className="rounded-2xl p-4 flex items-center justify-center gap-2 text-sm font-medium" style={{ border:`2px dashed ${T.primary}`, color:T.primary }}>
+                <Plus size={15}/> Create new collab
+              </button>
+            )}
+          </div>
+        )}
+    </>
+  );
+};
+
+// Modal to create a new collab with another provider
+const NewCollabModal = ({ open, onClose, me, providers, onCreated }) => {
+  const [step, setStep] = useState(0);
+  const [partnerId, setPartnerId] = useState('');
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [regular, setRegular] = useState('');
+  const [bundle, setBundle] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  useEffect(() => { if (open) { setStep(0); setPartnerId(''); setTitle(''); setDescription(''); setRegular(''); setBundle(''); } }, [open]);
+  const partner = providers.find(p => p.id === partnerId);
+  const canStep1 = !!partnerId;
+  const canStep2 = title.trim().length >= 3 && Number(regular) > 0 && Number(bundle) > 0 && Number(bundle) < Number(regular);
+
+  const submit = async () => {
+    if (!canStep2) return;
+    setSubmitting(true);
+    try {
+      await createCollab({
+        providerAId: me.id, providerBId: partnerId,
+        title: title.trim(), description: description.trim(),
+        regularPrice: Number(regular), bundlePrice: Number(bundle),
+        durationText: '2 sessions',
+      });
+      showToast('Collab created!', 'success');
+      onCreated();
+      onClose();
+    } catch (e) { showToast(e.message, 'error'); }
+    setSubmitting(false);
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Create collab" maxWidth={500}>
+      <div className="p-6 flex flex-col gap-4">
+        {step === 0 && (
+          <>
+            <p className="text-sm" style={{ color:T.ink500 }}>Pick a partner provider to team up with. The bundle becomes active immediately and appears in the feed.</p>
+            <div className="flex flex-col gap-2 max-h-72 overflow-y-auto">
+              {providers.length === 0 && <div className="text-center py-4 text-sm" style={{ color:T.ink500 }}>No other approved providers available yet.</div>}
+              {providers.map(p => (
+                <button key={p.id} onClick={() => setPartnerId(p.id)} className="flex items-center gap-3 p-3 rounded-xl text-left" style={{ background:T.bgSurface, border:`2px solid ${partnerId===p.id ? T.accent : T.border}` }}>
+                  <CoverArt tone={p.cover} className="w-10 h-10 rounded-full flex-shrink-0"/>
+                  <div className="flex-1"><div className="text-sm font-semibold" style={{ color:T.ink900 }}>{p.name}</div><div className="text-xs" style={{ color:T.ink500 }}>{p.specialty} · ★ {p.rating || 'new'}</div></div>
+                  {partnerId===p.id && <Check size={15} style={{ color:T.accent600 }}/>}
+                </button>
+              ))}
             </div>
+          </>
+        )}
+        {step === 1 && partner && (
+          <>
+            <div className="flex items-center gap-3 p-3 rounded-xl" style={{ background:T.bgMuted }}>
+              <div className="flex items-center">
+                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold z-10" style={{ background:T.primary, fontFamily:'Fraunces,serif' }}>{me.name[0]}</div>
+                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold -ml-3 ring-2 ring-white" style={{ background:T.accent, fontFamily:'Fraunces,serif' }}>{partner.name[0]}</div>
+              </div>
+              <div className="flex-1"><div className="text-sm font-semibold" style={{ color:T.ink900 }}>{me.name} × {partner.name}</div><div className="text-xs" style={{ color:T.ink500 }}>{me.specialty} + {partner.specialty}</div></div>
+            </div>
+            <div><label className="text-xs uppercase font-medium block mb-1" style={{ color:T.ink500 }}>Bundle title</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Train + Eat — Joint Coaching" className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}` }}/></div>
+            <div><label className="text-xs uppercase font-medium block mb-1" style={{ color:T.ink500 }}>What's included</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="1 strength session + 1 nutrition consultation. Booked together, paid once." className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none resize-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}` }}/></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="text-xs uppercase font-medium block mb-1" style={{ color:T.ink500 }}>Regular price (QAR)</label><input value={regular} onChange={e => setRegular(e.target.value.replace(/\D/g,''))} placeholder="420" className="w-full py-2.5 px-3.5 rounded-lg text-sm font-mono outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}` }}/></div>
+              <div><label className="text-xs uppercase font-medium block mb-1" style={{ color:T.ink500 }}>Bundle price (QAR)</label><input value={bundle} onChange={e => setBundle(e.target.value.replace(/\D/g,''))} placeholder="350" className="w-full py-2.5 px-3.5 rounded-lg text-sm font-mono outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}` }}/></div>
+            </div>
+            {Number(regular) > 0 && Number(bundle) > 0 && Number(bundle) < Number(regular) && (
+              <div className="rounded-xl p-3 text-sm" style={{ background:'#E0F2E7', color:'#286B3D' }}>Clients save <strong>QAR {Number(regular) - Number(bundle)}</strong> — a {Math.round(((Number(regular) - Number(bundle))/Number(regular))*100)}% discount</div>
+            )}
+          </>
+        )}
+      </div>
+      <div className="px-6 py-4 flex gap-3 border-t" style={{ borderColor:T.border }}>
+        <Btn variant="outline" onClick={step === 0 ? onClose : () => setStep(0)} disabled={submitting}>{step === 0 ? 'Cancel' : 'Back'}</Btn>
+        {step === 0
+          ? <Btn className="flex-1" disabled={!canStep1} onClick={() => setStep(1)} trailingIcon={ArrowRight}>Choose {partner?.name || 'partner'}</Btn>
+          : <Btn className="flex-1" disabled={!canStep2 || submitting} onClick={submit} trailingIcon={Check}>{submitting ? 'Creating…' : 'Create collab'}</Btn>}
+      </div>
+    </Modal>
+  );
+};
+
+// Tabs (Services editor + Provider's own posts + Collabs)
+const ProviderProfileTabs = ({ me, user, onProviderUpdate, onNavigate }) => {
+  const [tab, setTab] = useState('services');
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(me.services || []);
+  const [posts, setPosts] = useState([]);
+  const [loadingPosts, setLoadingPosts] = useState(false);
+  useEffect(() => { setDraft(me.services || []); }, [me?.id]);
+  useEffect(() => {
+    if (tab !== 'posts' || !me?.id) return;
+    setLoadingPosts(true);
+    sb.from('posts').select('*').eq('provider_id', me.id).order('created_at', { ascending: false })
+      .then(({ data }) => { setPosts((data || []).map(mapPost)); setLoadingPosts(false); });
+  }, [tab, me?.id]);
+
+  const isOwner = user?.id === me?.userId;
+
+  const addService = () => setDraft(s => [...s, { id:`s-${Math.random().toString(36).slice(2,8)}`, title:'New Service', duration:60, price:100, locType:'both' }]);
+  const updateService = (id, field, val) => setDraft(s => s.map(x => x.id === id ? { ...x, [field]: val } : x));
+  const removeService = (id) => setDraft(s => s.filter(x => x.id !== id));
+
+  const saveServices = async () => {
+    try {
+      const cleaned = draft.map(s => ({
+        id: s.id || `s-${Math.random().toString(36).slice(2,8)}`,
+        title: s.title || 'Untitled',
+        duration: Number(s.duration) || 60,
+        price: Number(s.price) || 0,
+        locType: s.locType || 'both',
+      }));
+      const updated = await updateProviderRecord(me.id, { services: cleaned });
+      onProviderUpdate(updated);
+      setEditing(false);
+      showToast('Services updated', 'success');
+    } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+  };
+
+  return (
+    <>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background:T.bgMuted }}>
+          {[{id:'services', label:'Services'}, {id:'posts', label:`Posts (${posts.length || 0})`}, {id:'collabs', label:'Collabs'}].map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} className="px-5 py-2 rounded-lg text-sm font-medium" style={{ background: tab===t.id ? T.bgSurface : 'transparent', color: tab===t.id ? T.ink900 : T.ink500 }}>{t.label}</button>
           ))}
         </div>
+        {tab === 'services' && isOwner && (
+          !editing
+            ? <Btn size="sm" variant="outline" onClick={() => setEditing(true)}>Edit services</Btn>
+            : <div className="flex gap-2"><Btn size="sm" variant="outline" onClick={() => { setDraft(me.services || []); setEditing(false); }}>Cancel</Btn><Btn size="sm" onClick={saveServices}>Save</Btn></div>
+        )}
       </div>
-    </div>
+
+      {tab === 'services' && (
+        <div className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          {!editing ? (
+            <div className="flex flex-col gap-2">
+              {(me.services || []).length === 0 && <div className="text-center py-6 text-sm" style={{ color:T.ink500 }}>No services listed yet. Click "Edit services" to add some.</div>}
+              {(me.services || []).map(s => (
+                <div key={s.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background:T.bgMuted }}>
+                  <div>
+                    <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{s.title}</div>
+                    <div className="text-xs" style={{ color:T.ink500 }}>{s.duration} min · {s.locType === 'client_home' ? 'At client\'s place' : s.locType === 'both' ? 'Flexible' : 'At your location'}</div>
+                  </div>
+                  <div className="text-sm font-semibold" style={{ color:T.ink900 }}>QAR {s.price}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {draft.map((s, i) => (
+                <div key={s.id} className="rounded-xl p-3 flex flex-col gap-2" style={{ background:T.bgMuted, border:`1px solid ${T.border}` }}>
+                  <div className="flex items-start gap-2">
+                    <input value={s.title} onChange={e => updateService(s.id, 'title', e.target.value)} placeholder="Service name" className="flex-1 py-2 px-3 rounded-lg text-sm outline-none font-semibold" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+                    <button onClick={() => removeService(s.id)} className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ color:T.danger, background:T.bgSurface }}><X size={15}/></button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Duration (min)</label>
+                      <input value={s.duration} onChange={e => updateService(s.id, 'duration', e.target.value.replace(/\D/g,''))} type="text" className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Price (QAR)</label>
+                      <input value={s.price} onChange={e => updateService(s.id, 'price', e.target.value.replace(/\D/g,''))} type="text" className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Where</label>
+                      <select value={s.locType} onChange={e => updateService(s.id, 'locType', e.target.value)} className="w-full py-1.5 px-2 rounded text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}>
+                        <option value="client_home">Client's place</option>
+                        <option value="provider_location">My location</option>
+                        <option value="both">Flexible</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <button onClick={addService} className="rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2" style={{ background:T.bgSurface, border:`2px dashed ${T.border}`, color:T.primary }}>
+                <Plus size={15}/> Add service
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === 'collabs' && <CollabsTab me={me} isOwner={isOwner}/>}
+
+      {tab === 'posts' && (
+        <div>
+          {loadingPosts ? <div className="text-center py-12 text-sm" style={{ color:T.ink500 }}>Loading posts…</div>
+            : posts.length === 0 ? (
+              <div className="rounded-2xl p-12 text-center" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+                <Camera size={28} className="mx-auto mb-3" style={{ color:T.ink300 }}/>
+                <div className="text-sm font-medium mb-1" style={{ color:T.ink900 }}>No posts yet</div>
+                <div className="text-xs" style={{ color:T.ink500 }}>Create your first post from the Dashboard to share completed sessions.</div>
+              </div>
+            ) : (
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {posts.map(p => (
+                  <div key={p.id} className="rounded-xl overflow-hidden" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+                    {p.imageUrl ? <img src={p.imageUrl} alt="" className="w-full" style={{ aspectRatio:'1', objectFit:'cover' }}/>
+                      : <CoverArt tone={p.coverTone} style={{ aspectRatio:'1' }}/>}
+                    <div className="p-3">
+                      <div className="text-xs line-clamp-3" style={{ color:T.ink700 }}>{p.caption}</div>
+                      <div className="text-[10px] mt-2 flex items-center gap-2" style={{ color:T.ink500 }}>
+                        <Heart size={11}/> {p.likes}<span>·</span><span>{p.time}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+        </div>
+      )}
+    </>
   );
 };
 
 // ============================================================
 // ADMIN PAGE (wired to real pending providers)
 // ============================================================
+// #27 — Admin document viewer (ID, CR, avatar)
+const DocumentViewerModal = ({ open, onClose, provider }) => {
+  if (!provider) return null;
+  const isPdf = (url) => url && url.toLowerCase().includes('.pdf');
+  return (
+    <Modal open={open} onClose={onClose} title={`${provider.name}'s documents`} maxWidth={680}>
+      <div className="p-6 flex flex-col gap-5">
+        <div className="rounded-xl p-4 grid grid-cols-2 gap-3 text-sm" style={{ background:T.bgMuted }}>
+          <div><div className="text-[10px] uppercase font-medium" style={{ color:T.ink500 }}>Name</div><div className="font-medium" style={{ color:T.ink900 }}>{provider.name}</div></div>
+          <div><div className="text-[10px] uppercase font-medium" style={{ color:T.ink500 }}>Specialty</div><div className="font-medium" style={{ color:T.ink900 }}>{provider.specialty}</div></div>
+          <div><div className="text-[10px] uppercase font-medium" style={{ color:T.ink500 }}>Residency</div><div className="font-medium" style={{ color:T.ink900 }}>{provider.residency || '—'}</div></div>
+          <div><div className="text-[10px] uppercase font-medium" style={{ color:T.ink500 }}>Email</div><div className="font-medium truncate" style={{ color:T.ink900 }}>{provider.email || '—'}</div></div>
+        </div>
+
+        <div>
+          <h3 className="text-xs uppercase font-medium mb-2" style={{ color:T.ink500 }}>Profile photo</h3>
+          {provider.avatarUrl ? (
+            <a href={provider.avatarUrl} target="_blank" rel="noopener noreferrer">
+              <img src={provider.avatarUrl} alt="" className="w-32 h-32 rounded-xl object-cover" style={{ border:`1px solid ${T.border}` }}/>
+            </a>
+          ) : <div className="text-sm" style={{ color:T.ink500 }}>Not uploaded</div>}
+        </div>
+
+        <div>
+          <h3 className="text-xs uppercase font-medium mb-2" style={{ color:T.ink500 }}>ID / CR document</h3>
+          {provider.idUrl ? (
+            isPdf(provider.idUrl) ? (
+              <a href={provider.idUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium" style={{ background:T.primary100, color:T.primary }}>
+                <FileText size={15}/> Open PDF
+              </a>
+            ) : (
+              <a href={provider.idUrl} target="_blank" rel="noopener noreferrer">
+                <img src={provider.idUrl} alt="" className="max-w-full rounded-xl" style={{ border:`1px solid ${T.border}`, maxHeight: 400 }}/>
+              </a>
+            )
+          ) : <div className="text-sm" style={{ color:T.ink500 }}>Not uploaded</div>}
+        </div>
+
+        <div className="rounded-xl p-3" style={{ background:T.bgMuted }}>
+          <div className="text-xs" style={{ color:T.ink500 }}>Bio</div>
+          <p className="text-sm mt-1" style={{ color:T.ink900 }}>{provider.bio || '—'}</p>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
 const AdminPage = () => {
   const [tab, setTab] = useState('applications');
   const [applications, setApplications] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [docViewer, setDocViewer] = useState(null);
 
   const loadData = async () => {
     setLoading(true);
@@ -2260,12 +3120,18 @@ const AdminPage = () => {
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+      <DocumentViewerModal open={!!docViewer} onClose={() => setDocViewer(null)} provider={docViewer?.provider}/>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-semibold" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Admin</h1>
         <Btn variant="outline" size="sm" onClick={loadData} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</Btn>
       </div>
-      <div className="flex gap-1 p-1 rounded-xl w-fit mb-6" style={{ background:T.bgMuted }}>
-        {[{id:'applications',label:`Applications (${applications.length})`},{id:'users',label:`Users (${users.length})`}].map(t => (
+      <div className="flex gap-1 p-1 rounded-xl w-fit mb-6 flex-wrap" style={{ background:T.bgMuted }}>
+        {[
+          {id:'applications', label:`Applications (${applications.length})`},
+          {id:'users', label:`Providers (${users.length})`},
+          {id:'bookings', label:'Bookings'},
+          {id:'earnings', label:'Earnings'},
+        ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} className="px-5 py-2 rounded-lg text-sm font-medium" style={{ background: tab===t.id ? T.bgSurface : 'transparent', color: tab===t.id ? T.ink900 : T.ink500 }}>{t.label}</button>
         ))}
       </div>
@@ -2293,9 +3159,12 @@ const AdminPage = () => {
                       </div>
                       <p className="mt-2 text-sm" style={{ color:T.ink700 }}>{a.bio}</p>
                       <div className="mt-2 text-xs" style={{ color:T.ink500 }}>Price from: QAR {a.priceFrom} · {a.residency || 'Residency not specified'}</div>
-                      <div className="mt-3 flex gap-2">
+                      <div className="mt-3 flex gap-2 flex-wrap">
                         <Btn size="sm" leadingIcon={Check} onClick={() => setStatus(a.id, 'approved')}>Approve</Btn>
                         <Btn size="sm" variant="outline" leadingIcon={X} onClick={() => setStatus(a.id, 'rejected')}>Reject</Btn>
+                        {(a.idUrl || a.avatarUrl) && (
+                          <Btn size="sm" variant="ghost" leadingIcon={FileText} onClick={() => setDocViewer({ provider: a })}>Review documents</Btn>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2320,7 +3189,126 @@ const AdminPage = () => {
             ))}
         </div>
       )}
+
+      {!loading && tab === 'bookings' && <AdminBookingsTab/>}
+      {!loading && tab === 'earnings' && <AdminEarningsTab/>}
     </div>
+  );
+};
+
+// #28 — Admin bookings overview
+const AdminBookingsTab = () => {
+  const [bookings, setBookings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all');
+  useEffect(() => {
+    setLoading(true);
+    sb.from('bookings').select('*').order('created_at', { ascending: false }).then(({ data }) => {
+      setBookings((data || []).map(mapBooking)); setLoading(false);
+    });
+  }, []);
+  const filtered = filter === 'all' ? bookings : bookings.filter(b => b.status === filter);
+  const total = bookings.reduce((s, b) => s + (Number(b.total) || 0), 0);
+  return (
+    <>
+      <div className="grid sm:grid-cols-4 gap-3 mb-6">
+        {[
+          { label:'Total bookings', value: bookings.length, color: T.primary },
+          { label:'Pending', value: bookings.filter(b => b.status === 'pending').length, color: T.accent600 },
+          { label:'Completed', value: bookings.filter(b => b.status === 'completed').length, color: T.success },
+          { label:'Gross volume', value: `QAR ${Math.round(total).toLocaleString()}`, color: T.ink900 },
+        ].map((s,i) => (
+          <div key={i} className="rounded-2xl p-4" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+            <div className="text-xs" style={{ color:T.ink500 }}>{s.label}</div>
+            <div className="text-xl font-semibold font-mono mt-1" style={{ color:s.color }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-1 p-1 rounded-xl w-fit mb-4 flex-wrap" style={{ background:T.bgMuted }}>
+        {['all','pending','approved','confirmed','completed','cancelled','rejected'].map(f => (
+          <button key={f} onClick={() => setFilter(f)} className="px-3 py-1.5 rounded-md text-xs font-medium" style={{ background: filter===f ? T.bgSurface : 'transparent', color: filter===f ? T.ink900 : T.ink500 }}>{f}</button>
+        ))}
+      </div>
+      <div className="rounded-2xl overflow-hidden" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+        {loading ? <div className="p-8 text-center text-sm" style={{ color:T.ink500 }}>Loading…</div>
+          : filtered.length === 0 ? <div className="p-8 text-center text-sm" style={{ color:T.ink500 }}>No bookings with that filter.</div>
+          : filtered.map((b, i, arr) => (
+            <div key={b.id} className="flex items-center gap-3 p-4 text-sm" style={{ borderBottom: i<arr.length-1 ? `1px solid ${T.border}` : 'none' }}>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold truncate" style={{ color:T.ink900 }}>{b.serviceTitle}</div>
+                <div className="text-xs truncate" style={{ color:T.ink500 }}>{b.clientName || 'client'} → {b.providerName} · {b.when}</div>
+              </div>
+              <div className="font-mono font-semibold flex-shrink-0" style={{ color:T.ink900 }}>QAR {b.total}</div>
+              <StatusBadge status={b.status}/>
+            </div>
+          ))}
+      </div>
+    </>
+  );
+};
+
+// #29 — Admin earnings dashboard (platform fees)
+const AdminEarningsTab = () => {
+  const [bookings, setBookings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    setLoading(true);
+    sb.from('bookings').select('*').eq('status', 'completed').then(({ data }) => {
+      setBookings((data || []).map(mapBooking)); setLoading(false);
+    });
+  }, []);
+  const platformCut = bookings.reduce((s, b) => s + (Number(b.total) || 0) * 0.12, 0); // 12% fee
+  const providerPaid = bookings.reduce((s, b) => s + (Number(b.total) || 0) * 0.88, 0);
+  const gross = platformCut + providerPaid;
+  const today = new Date();
+  // Last 6 months breakdown
+  const months = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(today.getFullYear(), today.getMonth() - (5 - i), 1);
+    return d;
+  });
+  const monthData = months.map(m => {
+    const inMonth = bookings.filter(b => {
+      const d = new Date(b.date);
+      return d.getMonth() === m.getMonth() && d.getFullYear() === m.getFullYear();
+    });
+    return { date: m, fee: inMonth.reduce((s, b) => s + (Number(b.total) || 0) * 0.12, 0) };
+  });
+  const maxMonth = Math.max(...monthData.map(m => m.fee), 1);
+  return (
+    <>
+      {loading && <div className="p-8 text-center text-sm" style={{ color:T.ink500 }}>Loading…</div>}
+      {!loading && (
+        <>
+          <div className="grid sm:grid-cols-3 gap-3 mb-6">
+            <div className="rounded-2xl p-6" style={{ background:T.primary, color:'#fff' }}>
+              <div className="text-xs opacity-70">Platform revenue (12%)</div>
+              <div className="text-3xl font-semibold mt-1" style={{ fontFamily:'Fraunces,serif' }}>QAR {Math.round(platformCut).toLocaleString()}</div>
+              <div className="text-xs opacity-70 mt-2">From {bookings.length} completed bookings</div>
+            </div>
+            <div className="rounded-2xl p-6" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+              <div className="text-xs" style={{ color:T.ink500 }}>Gross volume</div>
+              <div className="text-3xl font-semibold mt-1" style={{ color:T.ink900, fontFamily:'Fraunces,serif' }}>QAR {Math.round(gross).toLocaleString()}</div>
+            </div>
+            <div className="rounded-2xl p-6" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+              <div className="text-xs" style={{ color:T.ink500 }}>Paid out to providers</div>
+              <div className="text-3xl font-semibold mt-1" style={{ color:T.success, fontFamily:'Fraunces,serif' }}>QAR {Math.round(providerPaid).toLocaleString()}</div>
+            </div>
+          </div>
+          <div className="rounded-2xl p-6" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+            <h3 className="text-sm font-semibold mb-4" style={{ color:T.ink900 }}>Last 6 months · platform fees</h3>
+            <div className="flex gap-2 h-32 items-end">
+              {monthData.map((m, i) => (
+                <div key={i} className="flex-1 flex flex-col items-center gap-2">
+                  <div className="rounded-t w-full" style={{ background: i===5 ? T.accent : T.primary100, height:`${Math.max((m.fee / maxMonth) * 100, 4)}%` }} title={`QAR ${Math.round(m.fee)}`}/>
+                  <div className="text-[10px]" style={{ color:T.ink500 }}>{MONTH_NAMES[m.date.getMonth()].slice(0,3)}</div>
+                  <div className="text-[10px] font-mono font-semibold" style={{ color:T.ink900 }}>{Math.round(m.fee)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </>
   );
 };
 
@@ -2360,6 +3348,282 @@ const TermsPage = ({ onNavigate }) => {
 // ============================================================
 // BECOME-A-PROVIDER MODAL (for existing clients upgrading their account)
 // ============================================================
+// ============================================================
+// CLIENT SETTINGS MODALS
+// ============================================================
+
+// Generic toggle switch
+const Toggle = ({ on, onChange }) => (
+  <button onClick={() => onChange(!on)} className="relative w-11 h-6 rounded-full transition-colors flex-shrink-0" style={{ background: on ? T.primary : T.border }}>
+    <div className="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform" style={{ transform: on ? 'translateX(22px)' : 'translateX(2px)' }}/>
+  </button>
+);
+
+// #14 — Edit Client Profile
+const EditClientProfileModal = ({ open, onClose, user, onSaved }) => {
+  const [name, setName] = useState(user?.name || '');
+  const [phone, setPhone] = useState(user?.phone || '');
+  const [city, setCity] = useState(user?.city || 'Doha');
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState(user?.avatarUrl || null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (open) { setName(user?.name || ''); setPhone(user?.phone || ''); setCity(user?.city || 'Doha'); setAvatarPreview(user?.avatarUrl || null); setAvatarFile(null); } }, [open, user]);
+  const handleAvatar = (file) => {
+    setAvatarFile(file);
+    if (file) { const r = new FileReader(); r.onload = () => setAvatarPreview(r.result); r.readAsDataURL(file); }
+  };
+  const save = async () => {
+    setSaving(true);
+    try {
+      let avatarUrl = user?.avatarUrl;
+      if (avatarFile) { try { avatarUrl = await uploadToBucket('provider-avatars', avatarFile, user.id); } catch (e) {} }
+      await sb.auth.updateUser({ data: { name, phone, city, avatarUrl } });
+      onSaved({ ...user, name, phone, city, avatarUrl });
+      showToast('Profile updated', 'success');
+      onClose();
+    } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    setSaving(false);
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Edit profile" maxWidth={460}>
+      <div className="p-6 flex flex-col gap-4">
+        <div className="flex items-center gap-4">
+          {avatarPreview ? <img src={avatarPreview} alt="" className="w-20 h-20 rounded-full object-cover" style={{ border:`2px solid ${T.border}` }}/> :
+            <div className="w-20 h-20 rounded-full flex items-center justify-center text-white text-2xl font-semibold" style={{ background:`linear-gradient(135deg,${T.primary},${T.accent})`, fontFamily:'Fraunces,serif' }}>{(name || '?')[0].toUpperCase()}</div>}
+          <label className="cursor-pointer text-xs font-medium px-3 py-2 rounded-lg" style={{ background:T.primary100, color:T.primary }}>
+            {avatarFile ? 'Change photo' : 'Upload photo'}
+            <input type="file" accept="image/*" className="hidden" onChange={e => handleAvatar(e.target.files?.[0] || null)}/>
+          </label>
+        </div>
+        {[{label:'Full name', val:name, set:setName}, {label:'Phone', val:phone, set:setPhone, placeholder:'+974 5544 3322'}, {label:'City', val:city, set:setCity}].map(f => (
+          <div key={f.label}><label className="text-xs uppercase font-medium block mb-1" style={{ color:T.ink500 }}>{f.label}</label><input value={f.val} onChange={e => f.set(e.target.value)} placeholder={f.placeholder || ''} className="w-full py-2.5 px-3.5 rounded-lg text-sm outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/></div>
+        ))}
+        <div className="flex gap-3 mt-2"><Btn variant="outline" onClick={onClose} className="flex-1">Cancel</Btn><Btn onClick={save} className="flex-1" disabled={saving || !name.trim()}>{saving ? 'Saving…' : 'Save'}</Btn></div>
+      </div>
+    </Modal>
+  );
+};
+
+// #8 — Saved Addresses Manager
+const SavedAddressesModal = ({ open, onClose, user }) => {
+  const [addrs, setAddrs] = useState([]);
+  const [adding, setAdding] = useState(false);
+  const [label, setLabel] = useState('');
+  const [addr, setAddr] = useState('');
+  const [loading, setLoading] = useState(false);
+  const reload = async () => { if (!user?.id) return; setLoading(true); setAddrs(await fetchAddresses(user.id)); setLoading(false); };
+  useEffect(() => { if (open) reload(); }, [open, user?.id]);
+  const add = async () => {
+    if (!label.trim() || !addr.trim()) return;
+    try { await addAddress(user.id, label.trim(), addr.trim()); setLabel(''); setAddr(''); setAdding(false); reload(); showToast('Address added', 'success'); }
+    catch (e) { showToast(e.message, 'error'); }
+  };
+  const remove = async (id) => { await deleteAddress(id); reload(); };
+  return (
+    <Modal open={open} onClose={onClose} title="Saved addresses" maxWidth={480}>
+      <div className="p-4 flex flex-col gap-2 max-h-[70vh] overflow-y-auto">
+        {loading && <div className="text-center py-4 text-sm" style={{ color:T.ink500 }}>Loading…</div>}
+        {!loading && addrs.length === 0 && !adding && <div className="text-center py-6 text-sm" style={{ color:T.ink500 }}>No saved addresses yet.</div>}
+        {addrs.map(a => (
+          <div key={a.id} className="flex items-start gap-3 p-3 rounded-xl" style={{ background:T.bgMuted }}>
+            <MapPin size={16} style={{ color:T.primary, marginTop:2 }}/>
+            <div className="flex-1"><div className="text-sm font-semibold" style={{ color:T.ink900 }}>{a.label}</div><div className="text-xs" style={{ color:T.ink500 }}>{a.address}</div></div>
+            <button onClick={() => remove(a.id)} className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ color:T.danger }}><X size={13}/></button>
+          </div>
+        ))}
+        {adding ? (
+          <div className="p-3 rounded-xl flex flex-col gap-2" style={{ background:T.primary100, border:`1px solid ${T.primary+'33'}` }}>
+            <input value={label} onChange={e => setLabel(e.target.value)} placeholder="Label (e.g. Home)" className="w-full py-2 px-3 rounded-lg text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+            <input value={addr} onChange={e => setAddr(e.target.value)} placeholder="Full address" className="w-full py-2 px-3 rounded-lg text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+            <div className="flex gap-2"><Btn size="sm" variant="outline" onClick={() => setAdding(false)} className="flex-1">Cancel</Btn><Btn size="sm" onClick={add} className="flex-1" disabled={!label.trim() || !addr.trim()}>Save</Btn></div>
+          </div>
+        ) : (
+          <button onClick={() => setAdding(true)} className="flex items-center justify-center gap-2 p-3 rounded-xl text-sm font-medium" style={{ border:`2px dashed ${T.border}`, color:T.primary }}><Plus size={15}/> Add address</button>
+        )}
+      </div>
+    </Modal>
+  );
+};
+
+// #9 — Payment Methods Manager
+const PaymentMethodsModal = ({ open, onClose, user }) => {
+  const [cards, setCards] = useState([]);
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState('');
+  const [num, setNum] = useState('');
+  const [exp, setExp] = useState('');
+  const [cvv, setCvv] = useState('');
+  const reload = async () => { if (!user?.id) return; setCards(await fetchPaymentMethods(user.id)); };
+  useEffect(() => { if (open) reload(); }, [open, user?.id]);
+  const add = async () => {
+    if (!name.trim() || num.length < 16) return;
+    try { await addPaymentMethod(user.id, { brand:'Visa', last4: num.slice(-4), expiry: exp, cardholder: name }); setName(''); setNum(''); setExp(''); setCvv(''); setAdding(false); reload(); showToast('Card added', 'success'); }
+    catch (e) { showToast(e.message, 'error'); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Payment methods" maxWidth={480}>
+      <div className="p-4 flex flex-col gap-2 max-h-[70vh] overflow-y-auto">
+        {cards.map(c => (
+          <div key={c.id} className="flex items-center gap-3 p-3 rounded-xl" style={{ background:T.bgMuted }}>
+            <div className="w-12 h-8 rounded flex items-center justify-center text-white text-xs font-bold" style={{ background:'linear-gradient(135deg,#1a1f71,#2d4ac0)' }}>{c.brand?.toUpperCase() || 'CARD'}</div>
+            <div className="flex-1">
+              <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{c.brand} ···· {c.last4}</div>
+              <div className="text-xs" style={{ color:T.ink500 }}>{c.expiry} {c.is_default && <span className="ml-1 px-1.5 py-0.5 rounded text-[10px]" style={{ background:T.primary100, color:T.primary }}>Default</span>}</div>
+            </div>
+            <div className="flex gap-1">
+              {!c.is_default && <button onClick={async () => { await setDefaultPaymentMethod(user.id, c.id); reload(); }} className="text-xs font-medium px-2 py-1 rounded-lg" style={{ background:T.primary100, color:T.primary }}>Set default</button>}
+              <button onClick={async () => { await deletePaymentMethod(c.id); reload(); }} className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ color:T.danger }}><X size={13}/></button>
+            </div>
+          </div>
+        ))}
+        {adding ? (
+          <div className="p-4 rounded-xl flex flex-col gap-3" style={{ background:T.primary100 }}>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="Cardholder name" className="w-full py-2 px-3 rounded-lg text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+            <input value={num} onChange={e => setNum(e.target.value.replace(/\D/g,'').slice(0,16))} placeholder="Card number" className="w-full py-2 px-3 rounded-lg text-sm font-mono outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+            <div className="grid grid-cols-2 gap-3">
+              <input value={exp} onChange={e => setExp(e.target.value)} placeholder="MM/YY" className="w-full py-2 px-3 rounded-lg text-sm font-mono outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+              <input value={cvv} onChange={e => setCvv(e.target.value.replace(/\D/g,'').slice(0,4))} placeholder="CVV" className="w-full py-2 px-3 rounded-lg text-sm font-mono outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+            </div>
+            <p className="text-[10px]" style={{ color:T.ink500 }}>For demo only — no real card data stored. Only last 4 + expiry saved.</p>
+            <div className="flex gap-2"><Btn size="sm" variant="outline" onClick={() => setAdding(false)} className="flex-1">Cancel</Btn><Btn size="sm" onClick={add} className="flex-1" disabled={!name.trim() || num.length < 16}>Add</Btn></div>
+          </div>
+        ) : (
+          <button onClick={() => setAdding(true)} className="flex items-center justify-center gap-2 p-3 rounded-xl text-sm font-medium" style={{ border:`2px dashed ${T.border}`, color:T.primary }}><Plus size={15}/> Add payment method</button>
+        )}
+      </div>
+    </Modal>
+  );
+};
+
+// #10 — Favorites Modal
+const FavoritesModal = ({ open, onClose, user, providers, onNavigate, favorites, onFavoritesChange }) => {
+  const fav = (favorites || []).map(id => providers.find(p => p.id === id)).filter(Boolean);
+  const unfav = async (id) => { await toggleFavorite(user.id, id); onFavoritesChange(); };
+  return (
+    <Modal open={open} onClose={onClose} title="Saved providers" maxWidth={480}>
+      <div className="p-4">
+        {fav.length === 0 ? <div className="text-center py-8 text-sm" style={{ color:T.ink500 }}>No saved providers yet. Tap the heart icon on any provider to save them.</div>
+          : <div className="grid grid-cols-2 gap-3">
+              {fav.map(p => (
+                <div key={p.id} className="rounded-xl overflow-hidden" style={{ background:T.bgMuted, border:`1px solid ${T.border}` }}>
+                  <CoverArt tone={p.cover} style={{ height:80 }}/>
+                  <div className="p-3">
+                    <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{p.name}</div>
+                    <div className="text-xs" style={{ color:T.ink500 }}>{p.specialty}</div>
+                    <div className="flex gap-2 mt-2">
+                      <button onClick={() => { onClose(); onNavigate('provider', { providerId: p.id }); }} className="flex-1 text-xs font-medium py-1.5 rounded-lg" style={{ background:T.primary100, color:T.primary }}>View</button>
+                      <button onClick={() => unfav(p.id)} className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ color:T.danger }}><Heart size={13} fill={T.danger}/></button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>}
+      </div>
+    </Modal>
+  );
+};
+
+// #11 — Following Modal
+const FollowingModal = ({ open, onClose, user, providers, onNavigate, follows, onFollowsChange }) => {
+  const followed = (follows || []).map(id => providers.find(p => p.id === id)).filter(Boolean);
+  const unfollow = async (id) => { await toggleFollow(user.id, id); onFollowsChange(); };
+  return (
+    <Modal open={open} onClose={onClose} title="Following" maxWidth={440}>
+      <div className="p-4 flex flex-col gap-2 max-h-[60vh] overflow-y-auto">
+        {followed.length === 0 ? <div className="text-center py-8 text-sm" style={{ color:T.ink500 }}>Not following anyone yet.</div>
+          : followed.map(p => (
+            <div key={p.id} className="flex items-center gap-3 p-3 rounded-xl" style={{ background:T.bgMuted }}>
+              <CoverArt tone={p.cover} className="w-10 h-10 rounded-full flex-shrink-0"/>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold truncate" style={{ color:T.ink900 }}>{p.name}</div>
+                <div className="text-xs" style={{ color:T.ink500 }}>{p.specialty}</div>
+              </div>
+              <button onClick={() => { onClose(); onNavigate('provider', { providerId: p.id }); }} className="text-xs font-medium px-2.5 py-1.5 rounded-lg" style={{ background:T.primary100, color:T.primary }}>View</button>
+              <button onClick={() => unfollow(p.id)} className="text-xs font-medium px-2.5 py-1.5 rounded-lg" style={{ background:T.border, color:T.ink700 }}>Unfollow</button>
+            </div>
+          ))}
+      </div>
+    </Modal>
+  );
+};
+
+// #12 — Notification Preferences
+const NotificationsModal = ({ open, onClose, user }) => {
+  const initial = user?.notificationPrefs || { bookingUpdates:true, messages:true, reminders:true, promotions:false, newProviders:false };
+  const [prefs, setPrefs] = useState(initial);
+  useEffect(() => { if (open) setPrefs(user?.notificationPrefs || initial); }, [open, user]);
+  const items = [
+    { key:'bookingUpdates', label:'Booking updates', sub:'Confirmations, cancellations, reminders' },
+    { key:'messages', label:'New messages', sub:'When the other side replies' },
+    { key:'reminders', label:'Session reminders', sub:'24h and 1h before your session' },
+    { key:'newProviders', label:'New providers', sub:'When new experts join in your area' },
+    { key:'promotions', label:'Offers & promotions', sub:'Deals, featured providers, bundles' },
+  ];
+  const save = async () => {
+    try { await sb.auth.updateUser({ data: { notificationPrefs: prefs } }); showToast('Preferences saved', 'success'); onClose(); }
+    catch (e) { showToast(e.message, 'error'); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Notification preferences" maxWidth={440}>
+      <div className="p-4">
+        {items.map((it, i) => (
+          <div key={it.key} className="flex items-center justify-between py-4" style={{ borderBottom: i<items.length-1 ? `1px solid ${T.border}` : 'none' }}>
+            <div><div className="text-sm font-medium" style={{ color:T.ink900 }}>{it.label}</div><div className="text-xs mt-0.5" style={{ color:T.ink500 }}>{it.sub}</div></div>
+            <Toggle on={!!prefs[it.key]} onChange={v => setPrefs(p => ({ ...p, [it.key]: v }))}/>
+          </div>
+        ))}
+      </div>
+      <div className="px-4 pb-4"><Btn className="w-full" onClick={save}>Save preferences</Btn></div>
+    </Modal>
+  );
+};
+
+// #13 — Privacy / Data
+const PrivacyModal = ({ open, onClose, user, onAccountDeleted }) => {
+  const initial = user?.privacyPrefs || { profileVisible:true, activityVisible:false };
+  const [prefs, setPrefs] = useState(initial);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  useEffect(() => { if (open) { setPrefs(user?.privacyPrefs || initial); setConfirmDelete(false); } }, [open, user]);
+  const save = async () => {
+    try { await sb.auth.updateUser({ data: { privacyPrefs: prefs } }); showToast('Privacy settings saved', 'success'); onClose(); }
+    catch (e) { showToast(e.message, 'error'); }
+  };
+  const requestData = () => showToast('Data export will arrive at your email within 30 days', 'info');
+  const deleteAccount = async () => {
+    // Best-effort: remove the user's domain data. Auth user deletion needs service-role; we approximate by clearing metadata and signing out.
+    try {
+      if (user?.id) {
+        await sb.from('providers').delete().eq('user_id', user.id).catch(() => {});
+        await sb.from('addresses').delete().eq('user_id', user.id).catch(() => {});
+        await sb.from('payment_methods').delete().eq('user_id', user.id).catch(() => {});
+        await sb.from('favorites').delete().eq('user_id', user.id).catch(() => {});
+        await sb.from('follows').delete().eq('user_id', user.id).catch(() => {});
+      }
+      await sb.auth.signOut();
+      showToast('Account data cleared. Sign out complete.', 'success');
+      onAccountDeleted();
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Privacy & data" maxWidth={480}>
+      <div className="p-4 flex flex-col gap-4">
+        <div className="rounded-xl p-4" style={{ background:T.bgMuted }}>
+          <div className="text-xs uppercase tracking-wider font-medium mb-3" style={{ color:T.ink500 }}>Profile visibility</div>
+          <div className="flex items-center justify-between py-2"><div><div className="text-sm font-medium" style={{ color:T.ink900 }}>Public profile</div><div className="text-xs" style={{ color:T.ink500 }}>Providers can see your name and city</div></div><Toggle on={prefs.profileVisible} onChange={v => setPrefs(p => ({ ...p, profileVisible:v }))}/></div>
+          <div className="flex items-center justify-between py-2" style={{ borderTop:`1px solid ${T.border}` }}><div><div className="text-sm font-medium" style={{ color:T.ink900 }}>Activity visible</div><div className="text-xs" style={{ color:T.ink500 }}>Others see your booking history on the feed</div></div><Toggle on={prefs.activityVisible} onChange={v => setPrefs(p => ({ ...p, activityVisible:v }))}/></div>
+        </div>
+        <div className="rounded-xl overflow-hidden" style={{ background:T.bgMuted }}>
+          <div className="text-xs uppercase tracking-wider font-medium px-4 pt-4 pb-2" style={{ color:T.ink500 }}>Data rights (Qatar PDPL)</div>
+          <button onClick={requestData} className="w-full flex items-center gap-3 px-4 py-3 text-left" style={{ borderTop:`1px solid ${T.border}` }}><FileText size={14}/><div className="flex-1"><div className="text-sm font-medium" style={{ color:T.ink900 }}>Download my data</div><div className="text-xs" style={{ color:T.ink500 }}>Receive all your data by email within 30 days</div></div></button>
+          {!confirmDelete ? <button onClick={() => setConfirmDelete(true)} className="w-full flex items-center gap-3 px-4 py-3 text-left" style={{ borderTop:`1px solid ${T.border}` }}><AlertCircle size={14} style={{ color:T.danger }}/><div className="flex-1"><div className="text-sm font-medium" style={{ color:T.danger }}>Delete my account</div><div className="text-xs" style={{ color:T.ink500 }}>Permanently remove your data</div></div></button>
+            : <div className="p-4" style={{ borderTop:`1px solid ${T.border}`, background:'#FBE2E6' }}><div className="text-xs mb-2" style={{ color:'#8B2A38' }}>This will delete your provider record, addresses, payment methods, favorites, and follows. Auth account stays but is signed out.</div><div className="flex gap-2"><Btn size="sm" variant="outline" onClick={() => setConfirmDelete(false)} className="flex-1">Cancel</Btn><Btn size="sm" variant="danger" onClick={deleteAccount} className="flex-1">Confirm delete</Btn></div></div>}
+        </div>
+        <Btn className="w-full" onClick={save}>Save privacy settings</Btn>
+      </div>
+    </Modal>
+  );
+};
+
 const BecomeProviderModal = ({ open, onClose, user, onDone }) => {
   const [step, setStep] = useState(0);
   const [cat, setCat] = useState('');
@@ -2607,6 +3871,9 @@ function App() {
   const [paymentModal, setPaymentModal] = useState(null);
   const [rescheduleModal, setRescheduleModal] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [favorites, setFavorites] = useState([]);
+  const [follows, setFollows] = useState([]);
+  const [likedPosts, setLikedPosts] = useState([]);
 
   const currentRoute = history[history.length - 1];
   const isAuthed = !!user;
@@ -2669,6 +3936,16 @@ function App() {
       setProviders(merged);
       setPosts(posts);
       setBookings(bookings);
+
+      // Load favorites/follows/likes for current user
+      if (userId) {
+        try {
+          const [favs, fols, liked] = await Promise.all([fetchFavorites(userId), fetchFollows(userId), fetchLikedPosts(userId)]);
+          setFavorites(favs); setFollows(fols); setLikedPosts(liked);
+        } catch (e) {}
+      } else {
+        setFavorites([]); setFollows([]); setLikedPosts([]);
+      }
 
       // Pull messages for each booking
       const threadEntries = await Promise.all(bookings.map(b =>
@@ -2746,6 +4023,8 @@ function App() {
     const provider = bookingModal.provider;
     const newBooking = {
       userId: user?.id && user.id !== 'admin-shortcut' ? user.id : null,
+      clientName: user?.name || null,
+      clientEmail: user?.email || null,
       providerId: provider.id,
       providerName: provider.name, providerCover: provider.cover,
       serviceTitle: data.service.title, serviceId: data.service.id,
@@ -2802,18 +4081,63 @@ function App() {
     showToast('Booking rescheduled!', 'success');
   };
 
-  const handleSend = async (id, text) => {
+  const handleSend = async (id, text, imageUrl) => {
+    const fromRole = effectiveRole === 'provider' ? 'provider' : 'client';
     try {
-      const created = await insertMessage({ bookingId: id, from:'client', text });
+      const created = await insertMessage({ bookingId: id, from: fromRole, text, imageUrl });
       setThreads(p => ({ ...p, [id]: [...(p[id]||[]), created] }));
     } catch (e) {
-      setThreads(p => ({ ...p, [id]: [...(p[id]||[]), { id: Date.now(), from:'client', text, time:'Just now' }] }));
+      setThreads(p => ({ ...p, [id]: [...(p[id]||[]), { id: Date.now(), from: fromRole, text, imageUrl, time:'Just now' }] }));
     }
   };
 
   const handleMarkRead = async (id) => {
-    try { await markMessagesRead(id); } catch (e) {}
-    setThreads(p => ({ ...p, [id]: (p[id]||[]).map(m => m.from==='provider' ? {...m, read:true} : m) }));
+    const otherSide = effectiveRole === 'provider' ? 'client' : 'provider';
+    try {
+      // Generic mark-read: flip "read" on messages from the OTHER side for this booking
+      await sb.from('messages').update({ read: true }).eq('booking_id', id).eq('from_user', otherSide);
+    } catch (e) {}
+    setThreads(p => ({ ...p, [id]: (p[id]||[]).map(m => m.from===otherSide ? {...m, read:true} : m) }));
+  };
+
+  // Provider accepts a pending booking → status becomes 'approved' (client can now pay)
+  const handleAcceptBooking = async (id) => {
+    try {
+      const updated = await updateBooking(id, { status: 'approved' });
+      setBookings(p => p.map(b => b.id === id ? updated : b));
+      // System message in the thread
+      try {
+        const me = providers.find(p => p.id === user?.providerId);
+        const sys = await insertMessage({ bookingId: id, from:'system', system:true, icon:'check', text:`${me?.name || 'Provider'} accepted your booking` });
+        setThreads(p => ({ ...p, [id]: [...(p[id] || []), sys] }));
+      } catch (e) {}
+      showToast('Booking accepted', 'success');
+    } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+  };
+
+  const handleDeclineBooking = async (id) => {
+    try {
+      const updated = await updateBooking(id, { status: 'rejected' });
+      setBookings(p => p.map(b => b.id === id ? updated : b));
+      try {
+        const sys = await insertMessage({ bookingId: id, from:'system', system:true, icon:'alert', text:'Booking declined by provider' });
+        setThreads(p => ({ ...p, [id]: [...(p[id] || []), sys] }));
+      } catch (e) {}
+      showToast('Booking declined');
+    } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+  };
+
+  // Provider marks a confirmed booking as completed (after the session)
+  const handleCompleteBooking = async (id) => {
+    try {
+      const updated = await updateBooking(id, { status: 'completed' });
+      setBookings(p => p.map(b => b.id === id ? updated : b));
+      try {
+        const sys = await insertMessage({ bookingId: id, from:'system', system:true, icon:'check', text:'Session completed' });
+        setThreads(p => ({ ...p, [id]: [...(p[id] || []), sys] }));
+      } catch (e) {}
+      showToast('Marked as completed', 'success');
+    } catch (e) { showToast('Failed: ' + e.message, 'error'); }
   };
 
   const handleProviderInquiry = (prov) => {
@@ -2823,7 +4147,10 @@ function App() {
       if (existing) { goto('messages', { bookingId: existing.id }); return; }
       try {
         const created = await insertBooking({
-          userId: user?.id, providerId: prov.id,
+          userId: user?.id,
+          clientName: user?.name || null,
+          clientEmail: user?.email || null,
+          providerId: prov.id,
           providerName: prov.name, providerCover: prov.cover,
           serviceTitle: 'Inquiry · no booking yet',
           when: 'Pre-booking',
@@ -2844,13 +4171,13 @@ function App() {
   // Route resolution (must be before any early return — rules of hooks)
   const provider = useMemo(() => providers.find(p => p.id === currentRoute.providerId), [currentRoute.providerId, providers]);
 
-  // Loading
+  // Loading — polished splash with logo + skeleton hint
   if (authLoading || loading) {
     return (
-      <div className="fixed inset-0 flex items-center justify-center flex-col gap-3" style={{ background:T.bgBase }}>
-        <Logo size={32}/>
+      <div className="fixed inset-0 flex items-center justify-center flex-col gap-3 pop-in" style={{ background:T.bgBase }}>
+        <Logo size={36}/>
         <div className="flex gap-1.5 mt-2">
-          {[0,1,2].map(i => <div key={i} className="w-2 h-2 rounded-full" style={{ background:T.primary, animation:`pulse 1s ${i*0.2}s infinite` }}/>)}
+          {[0,1,2].map(i => <div key={i} className="w-2 h-2 rounded-full" style={{ background:T.primary, animation:`pulse 1.1s ${i*0.18}s infinite` }}/>)}
         </div>
         <style>{`@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.3;transform:scale(0.6)} }`}</style>
       </div>
@@ -2874,17 +4201,18 @@ function App() {
   }
   else if (effectiveRole === 'admin' && routeName === 'admin') page = <AdminPage/>;
   else if (effectiveRole === 'provider') {
-    if (routeName === 'prov-book') page = <ProviderBookingsPage bookings={bookings}/>;
-    else if (routeName === 'prov-wallet') page = <ProviderWalletPage/>;
+    if (routeName === 'prov-book') page = <ProviderBookingsPage bookings={bookings} onAccept={handleAcceptBooking} onDecline={handleDeclineBooking} onComplete={handleCompleteBooking} onNavigate={goto}/>;
+    else if (routeName === 'messages') page = <MessagesPage bookings={bookings} threads={threads} onSend={handleSend} onMarkRead={handleMarkRead} initialBookingId={currentRoute.bookingId} me="provider"/>;
+    else if (routeName === 'prov-wallet') page = <ProviderWalletPage user={user} bookings={bookings}/>;
     else if (routeName === 'prov-profile') page = <ProviderProfilePage user={user} providers={providers} onProviderUpdate={handleProviderUpdate} onNavigate={goto}/>;
-    else if (routeName === 'profile') page = <ProfilePage user={user} onNavigate={goto} onLogout={handleLogout} onSwitchRole={handleSwitchRole} providers={providers}/>;
-    else page = <ProviderDashboard user={user} providers={providers} onRefreshPosts={refreshData}/>;
+    else if (routeName === 'profile') page = <ProfilePage user={user} onNavigate={goto} onLogout={handleLogout} onSwitchRole={handleSwitchRole} providers={providers} favorites={favorites} follows={follows} onFavoritesChange={async () => setFavorites(await fetchFavorites(user.id))} onFollowsChange={async () => setFollows(await fetchFollows(user.id))} onUserChange={(u) => setUser(u)}/>;
+    else page = <ProviderDashboard user={user} providers={providers} bookings={bookings} onRefreshPosts={refreshData} onNavigate={goto}/>;
   }
   else {
     // client
     if (routeName === 'bookings') page = <BookingsPage bookings={bookings} onNavigate={goto} onPay={handlePay} onCancel={handleCancel} onReschedule={b => setRescheduleModal(b)} providers={providers}/>;
-    else if (routeName === 'messages') page = <MessagesPage bookings={bookings} threads={threads} onSend={handleSend} onMarkRead={handleMarkRead} initialBookingId={currentRoute.bookingId}/>;
-    else if (routeName === 'profile') page = <ProfilePage user={user} onNavigate={goto} onLogout={handleLogout} onSwitchRole={handleSwitchRole} providers={providers}/>;
+    else if (routeName === 'messages') page = <MessagesPage bookings={bookings} threads={threads} onSend={handleSend} onMarkRead={handleMarkRead} initialBookingId={currentRoute.bookingId} me="client"/>;
+    else if (routeName === 'profile') page = <ProfilePage user={user} onNavigate={goto} onLogout={handleLogout} onSwitchRole={handleSwitchRole} providers={providers} favorites={favorites} follows={follows} onFavoritesChange={async () => setFavorites(await fetchFavorites(user.id))} onFollowsChange={async () => setFollows(await fetchFollows(user.id))} onUserChange={(u) => setUser(u)}/>;
     else page = <FeedPage providers={providers} posts={posts} onNavigate={goto} onBook={handleBookProvider} onBookCollab={p => requireAuth(() => showToast('Bundle booking requested', 'success'))}/>;
   }
 
@@ -2907,9 +4235,9 @@ function App() {
       <div className={showNavbar ? 'pt-16' : ''}>
         {page}
       </div>
-      {bookingModal && <BookingModal provider={bookingModal.provider} initialServiceId={bookingModal.serviceId} onClose={() => setBookingModal(null)} onComplete={handleBookComplete}/>}
+      {bookingModal && <BookingModal provider={bookingModal.provider} initialServiceId={bookingModal.serviceId} onClose={() => setBookingModal(null)} onComplete={handleBookComplete} takenSlots={bookings.filter(b => b.providerId === bookingModal.provider?.id && ['pending','approved','confirmed'].includes(b.status) && b.date && b.slot).map(b => `${fmtDateKey(new Date(b.date))}T${b.slot}`)}/>}
       {paymentModal && <PaymentModal booking={paymentModal} onClose={() => setPaymentModal(null)} onSuccess={handlePaymentSuccess}/>}
-      {rescheduleModal && <RescheduleModal booking={rescheduleModal} providers={providers} onClose={() => setRescheduleModal(null)} onComplete={handleRescheduleComplete}/>}
+      {rescheduleModal && <RescheduleModal booking={rescheduleModal} providers={providers} onClose={() => setRescheduleModal(null)} onComplete={handleRescheduleComplete} takenSlots={bookings.filter(b => b.providerId === rescheduleModal.providerId && b.id !== rescheduleModal.id && ['pending','approved','confirmed'].includes(b.status) && b.date && b.slot).map(b => `${fmtDateKey(new Date(b.date))}T${b.slot}`)}/>}
       <ToastHost/>
     </div>
   );
