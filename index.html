@@ -1039,12 +1039,20 @@ const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
   const [bio, setBio] = useState('');
   const [avatarFile, setAvatarFile] = useState(null);
   const [avatarPreview, setAvatarPreview] = useState(null);
-  const [price, setPrice] = useState('');
+  const [services, setServices] = useState([
+    { id:`s-${Math.random().toString(36).slice(2,8)}`, title:'', duration:60, price:'', locType:'both' }
+  ]);
   const [residency, setResidency] = useState('');
   const [idFile, setIdFile] = useState(null);
   const [agreed, setAgreed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+
+  const addServiceRow = () => setServices(s => [...s, { id:`s-${Math.random().toString(36).slice(2,8)}`, title:'', duration:60, price:'', locType:'both' }]);
+  const updateServiceRow = (id, field, val) => setServices(s => s.map(x => x.id === id ? { ...x, [field]: val } : x));
+  const removeServiceRow = (id) => setServices(s => s.length > 1 ? s.filter(x => x.id !== id) : s);
+  const validServices = services.filter(s => s.title.trim().length >= 3 && Number(s.price) > 0);
+  const priceFrom = validServices.length ? Math.min(...validServices.map(s => Number(s.price))) : 0;
 
   const handleAvatar = (file) => {
     setAvatarFile(file);
@@ -1057,12 +1065,12 @@ const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
 
   const cats = [{id:'cooking',label:'🍽️ Private Chef / Cooking'},{id:'fitness',label:'💪 Fitness & Personal Training'},{id:'wellness',label:'🥗 Nutrition & Wellness'},{id:'languages',label:'🗣️ Languages & Tutoring'},{id:'beauty',label:'✨ Beauty & Skincare'},{id:'tutoring',label:'📚 Academic Tutoring'}];
 
-  const stepLabels = ['Account','Category','Profile','Rate','Compliance','Submit'];
+  const stepLabels = ['Account','Category','Profile','Services','Compliance','Submit'];
   const canNext = [
     name.trim().length >= 2 && email.trim().includes('@') && password.length >= 4,
     !!cat,
     specialty.trim().length >= 2 && bio.trim().length >= 20,
-    !!price && Number(price) > 0,
+    validServices.length >= 1,
     !!residency,
     agreed,
   ];
@@ -1106,16 +1114,20 @@ const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
       // 5. ALWAYS create provider record in Supabase so admin sees the pending application,
       //    even if email confirmation is on and the user has no session yet.
       try {
+        const cleanedServices = validServices.map(s => ({
+          id: s.id, title: s.title.trim(), duration: Number(s.duration) || 60, price: Number(s.price), locType: s.locType || 'both',
+        }));
         await upsertProviderRecord({
           userId, email: email.trim(),
           name: name.trim(),
           specialty: specialty.trim(),
           bio: bio.trim(),
           cat,
-          priceFrom: Number(price),
+          priceFrom: priceFrom,
           residency,
           cover: tones[cat] || 'warm-orange',
           avatarUrl, idUrl,
+          services: cleanedServices,
           status: 'pending',
         });
       } catch (e) {
@@ -1195,13 +1207,43 @@ const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
           </div>
         )}
         {step === 3 && (
-          <div className="flex flex-col gap-4">
-            <p className="text-sm" style={{ color:T.ink500 }}>Set your starting rate. You can customize pricing per service after approval.</p>
-            <div><label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Price from (QAR)</label><input value={price} onChange={e => setPrice(e.target.value.replace(/\D/g,''))} placeholder="200" className="w-full py-2.5 px-3.5 rounded-lg text-sm font-mono outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/></div>
-            <div className="rounded-xl p-4" style={{ background:T.primary100 }}>
-              <div className="text-sm font-medium mb-1" style={{ color:T.ink900 }}>toBayt fee: 12%</div>
-              <div className="text-xs" style={{ color:T.ink700 }}>You keep 88% of each booking. For QAR {price||'200'}/session you'd receive <strong>QAR {Math.round(Number(price||200)*0.88)}</strong>.</div>
-            </div>
+          <div className="flex flex-col gap-3">
+            <p className="text-sm" style={{ color:T.ink500 }}>List the services you offer. Add as many as you want — clients pick one when they book.</p>
+            {services.map((s, idx) => (
+              <div key={s.id} className="rounded-xl p-3 flex flex-col gap-2" style={{ background:T.bgMuted, border:`1px solid ${T.border}` }}>
+                <div className="flex items-start gap-2">
+                  <input value={s.title} onChange={e => updateServiceRow(s.id, 'title', e.target.value)} placeholder="Service name (e.g. 1-on-1 Strength Session)" className="flex-1 py-2 px-3 rounded-lg text-sm outline-none font-semibold" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+                  {services.length > 1 && <button type="button" onClick={() => removeServiceRow(s.id)} className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ color:T.danger, background:T.bgSurface }}><X size={15}/></button>}
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Duration (min)</label>
+                    <input value={s.duration} onChange={e => updateServiceRow(s.id, 'duration', e.target.value.replace(/\D/g,''))} className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Price (QAR)</label>
+                    <input value={s.price} onChange={e => updateServiceRow(s.id, 'price', e.target.value.replace(/\D/g,''))} placeholder="200" className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Where</label>
+                    <select value={s.locType} onChange={e => updateServiceRow(s.id, 'locType', e.target.value)} className="w-full py-1.5 px-2 rounded text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}>
+                      <option value="client_home">Client's place</option>
+                      <option value="provider_location">My location</option>
+                      <option value="both">Flexible</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <button type="button" onClick={addServiceRow} className="rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2" style={{ background:T.bgSurface, border:`2px dashed ${T.border}`, color:T.primary }}>
+              <Plus size={15}/> Add another service
+            </button>
+            {priceFrom > 0 && (
+              <div className="rounded-xl p-4" style={{ background:T.primary100 }}>
+                <div className="text-sm font-medium mb-1" style={{ color:T.ink900 }}>{validServices.length} valid service{validServices.length === 1 ? '' : 's'} · starts from QAR {priceFrom}</div>
+                <div className="text-xs" style={{ color:T.ink700 }}>toBayt takes a 12% fee — you keep 88% of every booking.</div>
+              </div>
+            )}
           </div>
         )}
         {step === 4 && (
@@ -1232,7 +1274,7 @@ const ProviderSignupForm = ({ onAuth, onNavigate, onBack }) => {
         {step === 5 && (
           <div className="flex flex-col gap-4">
             <div className="rounded-2xl p-5" style={{ background:T.bgMuted }}>
-              {[['Account',`${name} · ${email}`],['Category',cats.find(c=>c.id===cat)?.label||cat],['Specialty',specialty],['Starting rate',`QAR ${price}`],['Residency',residency]].map(([k,v]) => (<div key={k} className="flex justify-between text-sm py-1.5"><span style={{ color:T.ink500 }}>{k}</span><span style={{ color:T.ink900, fontWeight:600, textAlign:'right' }}>{v}</span></div>))}
+              {[['Account',`${name} · ${email}`],['Category',cats.find(c=>c.id===cat)?.label||cat],['Specialty',specialty],['Services',`${validServices.length} listed · from QAR ${priceFrom}`],['Residency',residency]].map(([k,v]) => (<div key={k} className="flex justify-between text-sm py-1.5"><span style={{ color:T.ink500 }}>{k}</span><span style={{ color:T.ink900, fontWeight:600, textAlign:'right' }}>{v}</span></div>))}
             </div>
             <label className="flex items-start gap-3 cursor-pointer"><input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} className="mt-0.5"/><span className="text-sm" style={{ color:T.ink700 }}>I confirm all information is accurate, I agree to the <strong style={{ color:T.primary }}>Provider Terms</strong>, and I understand my account is pending admin approval before it becomes bookable.</span></label>
             {error && <div className="rounded-lg p-3 text-xs flex items-start gap-2" style={{ background:'#FBE2E6', color:'#8B2A38' }}><AlertCircle size={13} style={{ marginTop:1, flexShrink:0 }}/><span>{error}</span></div>}
@@ -2083,6 +2125,24 @@ const MessagesPage = ({ bookings, threads, onSend, onMarkRead, initialBookingId,
                   );
                 })}
                 <div ref={messagesEndRef}/>
+              </div>
+              {/* Quick-action chips */}
+              <div className="px-3 pt-2 pb-1 flex gap-2 flex-wrap border-t" style={{ borderColor:T.border }}>
+                {[
+                  { label: '📅  Can we reschedule?', text: 'Hi — would it be possible to reschedule our session? Let me know what times work for you.' },
+                  { label: '⚠️  Report an issue', text: "I need to report an issue with this booking. Could you get back to me about it?" },
+                  { label: '✅  See you soon', text: 'Looking forward to it — see you then!' },
+                  { label: '📍  Address?', text: 'Could you confirm the address / parking details before the session?' },
+                ].map((chip, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onSend(activeId, chip.text)}
+                    className="text-[11px] font-medium px-2.5 py-1.5 rounded-full transition-colors hover:opacity-90"
+                    style={{ background: T.bgMuted, color: T.ink700, border: `1px solid ${T.border}` }}
+                  >
+                    {chip.label}
+                  </button>
+                ))}
               </div>
               {pendingImage && (
                 <div className="p-3 border-t flex items-center gap-3" style={{ borderColor:T.border, background:T.bgMuted }}>
@@ -3631,12 +3691,20 @@ const BecomeProviderModal = ({ open, onClose, user, onDone }) => {
   const [bio, setBio] = useState('');
   const [avatarFile, setAvatarFile] = useState(null);
   const [avatarPreview, setAvatarPreview] = useState(null);
-  const [price, setPrice] = useState('');
+  const [services, setServices] = useState([
+    { id:`s-${Math.random().toString(36).slice(2,8)}`, title:'', duration:60, price:'', locType:'both' }
+  ]);
   const [residency, setResidency] = useState('');
   const [idFile, setIdFile] = useState(null);
   const [agreed, setAgreed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+
+  const addServiceRow = () => setServices(s => [...s, { id:`s-${Math.random().toString(36).slice(2,8)}`, title:'', duration:60, price:'', locType:'both' }]);
+  const updateServiceRow = (id, field, val) => setServices(s => s.map(x => x.id === id ? { ...x, [field]: val } : x));
+  const removeServiceRow = (id) => setServices(s => s.length > 1 ? s.filter(x => x.id !== id) : s);
+  const validServices = services.filter(s => s.title.trim().length >= 3 && Number(s.price) > 0);
+  const priceFrom = validServices.length ? Math.min(...validServices.map(s => Number(s.price))) : 0;
 
   const handleAvatar = (file) => {
     setAvatarFile(file);
@@ -3645,11 +3713,11 @@ const BecomeProviderModal = ({ open, onClose, user, onDone }) => {
   };
 
   const cats = [{id:'cooking',label:'🍽️ Private Chef / Cooking'},{id:'fitness',label:'💪 Fitness & Personal Training'},{id:'wellness',label:'🥗 Nutrition & Wellness'},{id:'languages',label:'🗣️ Languages & Tutoring'},{id:'beauty',label:'✨ Beauty & Skincare'},{id:'tutoring',label:'📚 Academic Tutoring'}];
-  const stepLabels = ['Category','Profile','Rate','Compliance','Submit'];
+  const stepLabels = ['Category','Profile','Services','Compliance','Submit'];
   const canNext = [
     !!cat,
     specialty.trim().length >= 2 && bio.trim().length >= 20,
-    !!price && Number(price) > 0,
+    validServices.length >= 1,
     !!residency,
     agreed,
   ];
@@ -3676,18 +3744,22 @@ const BecomeProviderModal = ({ open, onClose, user, onDone }) => {
       try { await sb.auth.updateUser({ data: { role:'provider', providerId: userId, avatarUrl } }); } catch (e) {}
 
       // Create the provider record in Supabase (status=pending until admin approves)
+      const cleanedServices = validServices.map(s => ({
+        id: s.id, title: s.title.trim(), duration: Number(s.duration) || 60, price: Number(s.price), locType: s.locType || 'both',
+      }));
       const created = await upsertProviderRecord({
         userId, email: user.email,
         name: user.name, specialty: specialty.trim(), bio: bio.trim(),
-        cat, priceFrom: Number(price), residency,
+        cat, priceFrom, residency,
         cover: tones[cat] || 'warm-orange',
         avatarUrl, idUrl,
+        services: cleanedServices,
         status: 'pending',
       });
 
       onDone({ providerId: userId, avatarUrl, created });
       onClose();
-      setStep(0); setCat(''); setSpecialty(''); setBio(''); setPrice(''); setResidency(''); setAgreed(false); setAvatarFile(null); setAvatarPreview(null); setIdFile(null);
+      setStep(0); setCat(''); setSpecialty(''); setBio(''); setServices([{ id:`s-${Math.random().toString(36).slice(2,8)}`, title:'', duration:60, price:'', locType:'both' }]); setResidency(''); setAgreed(false); setAvatarFile(null); setAvatarPreview(null); setIdFile(null);
       showToast('Provider application submitted — admin will review shortly', 'success');
     } catch (err) { setError(err.message); setSubmitting(false); }
   };
@@ -3738,12 +3810,40 @@ const BecomeProviderModal = ({ open, onClose, user, onDone }) => {
           </div>
         )}
         {step === 2 && (
-          <div className="flex flex-col gap-4">
-            <div><label className="text-xs font-medium uppercase tracking-wider mb-1 block" style={{ color:T.ink500 }}>Price from (QAR)</label><input value={price} onChange={e => setPrice(e.target.value.replace(/\D/g,''))} placeholder="200" className="w-full py-2.5 px-3.5 rounded-lg text-sm font-mono outline-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}`, color:T.ink900 }}/></div>
-            <div className="rounded-xl p-4" style={{ background:T.primary100 }}>
-              <div className="text-sm font-medium mb-1" style={{ color:T.ink900 }}>toBayt fee: 12%</div>
-              <div className="text-xs" style={{ color:T.ink700 }}>For QAR {price||'200'}/session you'd receive <strong>QAR {Math.round(Number(price||200)*0.88)}</strong>.</div>
-            </div>
+          <div className="flex flex-col gap-3">
+            <p className="text-sm" style={{ color:T.ink500 }}>List the services you offer. Add as many as you want — clients pick one when they book.</p>
+            {services.map(s => (
+              <div key={s.id} className="rounded-xl p-3 flex flex-col gap-2" style={{ background:T.bgMuted, border:`1px solid ${T.border}` }}>
+                <div className="flex items-start gap-2">
+                  <input value={s.title} onChange={e => updateServiceRow(s.id, 'title', e.target.value)} placeholder="Service name" className="flex-1 py-2 px-3 rounded-lg text-sm outline-none font-semibold" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+                  {services.length > 1 && <button type="button" onClick={() => removeServiceRow(s.id)} className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ color:T.danger, background:T.bgSurface }}><X size={15}/></button>}
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Duration (min)</label>
+                    <input value={s.duration} onChange={e => updateServiceRow(s.id, 'duration', e.target.value.replace(/\D/g,''))} className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Price (QAR)</label>
+                    <input value={s.price} onChange={e => updateServiceRow(s.id, 'price', e.target.value.replace(/\D/g,''))} placeholder="200" className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Where</label>
+                    <select value={s.locType} onChange={e => updateServiceRow(s.id, 'locType', e.target.value)} className="w-full py-1.5 px-2 rounded text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+                      <option value="client_home">Client's place</option>
+                      <option value="provider_location">My location</option>
+                      <option value="both">Flexible</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <button type="button" onClick={addServiceRow} className="rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2" style={{ background:T.bgSurface, border:`2px dashed ${T.border}`, color:T.primary }}>
+              <Plus size={15}/> Add another service
+            </button>
+            {priceFrom > 0 && (
+              <div className="rounded-xl p-3 text-xs" style={{ background:T.primary100, color:T.ink700 }}>{validServices.length} service{validServices.length === 1 ? '' : 's'} listed · starts from QAR {priceFrom}. You keep 88% of every booking.</div>
+            )}
           </div>
         )}
         {step === 3 && (
@@ -3769,7 +3869,7 @@ const BecomeProviderModal = ({ open, onClose, user, onDone }) => {
         {step === 4 && (
           <div className="flex flex-col gap-4">
             <div className="rounded-2xl p-5" style={{ background:T.bgMuted }}>
-              {[['Category',cats.find(c=>c.id===cat)?.label||cat],['Specialty',specialty],['Starting rate',`QAR ${price}`],['Residency',residency]].map(([k,v]) => (<div key={k} className="flex justify-between text-sm py-1.5"><span style={{ color:T.ink500 }}>{k}</span><span style={{ color:T.ink900, fontWeight:600, textAlign:'right' }}>{v}</span></div>))}
+              {[['Category',cats.find(c=>c.id===cat)?.label||cat],['Specialty',specialty],['Services',`${validServices.length} · from QAR ${priceFrom}`],['Residency',residency]].map(([k,v]) => (<div key={k} className="flex justify-between text-sm py-1.5"><span style={{ color:T.ink500 }}>{k}</span><span style={{ color:T.ink900, fontWeight:600, textAlign:'right' }}>{v}</span></div>))}
             </div>
             <label className="flex items-start gap-3 cursor-pointer"><input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} className="mt-0.5"/><span className="text-sm" style={{ color:T.ink700 }}>I confirm all info is accurate, I agree to the <strong style={{ color:T.primary }}>Provider Terms</strong>, and my account is pending admin approval before becoming bookable.</span></label>
             {error && <div className="rounded-lg p-3 text-xs flex items-start gap-2" style={{ background:'#FBE2E6', color:'#8B2A38' }}><AlertCircle size={13} style={{ marginTop:1, flexShrink:0 }}/><span>{error}</span></div>}
