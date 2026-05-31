@@ -971,9 +971,6 @@ const LoginPage = ({ onNavigate, onAuth }) => {
         <div className="mt-5 text-center text-sm" style={{ color:T.ink500 }}>
           Don't have an account? <button onClick={() => onNavigate('signup')} className="font-medium" style={{ color:T.primary }}>Sign up</button>
         </div>
-        <div className="mt-6 pt-5 border-t text-center" style={{ borderColor:T.border }}>
-          <div className="text-xs" style={{ color:T.ink500 }}>Admin shortcut: email <span className="font-mono font-semibold" style={{ color:T.ink900 }}>1234</span> / password <span className="font-mono font-semibold" style={{ color:T.ink900 }}>1234</span></div>
-        </div>
       </div>
     </div>
   );
@@ -1855,14 +1852,6 @@ const RescheduleModal = ({ booking, providers, onClose, onComplete, takenSlots =
 // LANDING PAGE
 // ============================================================
 const LandingPage = ({ onNavigate, isAuthed }) => {
-  const features = [
-    { icon:'🍽️', title:'Private Chefs', desc:'Restaurant-quality meals in your home.' },
-    { icon:'💪', title:'Fitness Coaches', desc:'Personal training, at your gym or theirs.' },
-    { icon:'📚', title:'Tutors', desc:'IGCSE, IB, language courses — in person.' },
-    { icon:'✨', title:'Beauty', desc:'At-home facials, bridal makeup, and more.' },
-    { icon:'🥗', title:'Nutritionists', desc:'Sustainable plans built around your life.' },
-    { icon:'🗣️', title:'Language Tutors', desc:'Arabic, English, and more — native speakers.' },
-  ];
   return (
     <div>
       <section className="relative overflow-hidden" style={{ background:`radial-gradient(at 20% 30%, ${T.primary100} 0%, transparent 50%), radial-gradient(at 80% 70%, ${T.accent100} 0%, transparent 50%), ${T.bgBase}`, minHeight:'80vh', display:'flex', alignItems:'center' }}>
@@ -1875,7 +1864,7 @@ const LandingPage = ({ onNavigate, isAuthed }) => {
               Share <em style={{ color:T.accent600, fontStyle:'italic' }}>progress</em>.
             </h1>
             <p className="mt-6 text-lg leading-relaxed" style={{ color:T.ink700 }}>
-              Private chefs, fitness coaches, tutors, and more — vetted, nearby, and ready when you are.
+              Vetted local experts, nearby and ready when you are.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Btn size="lg" onClick={() => onNavigate('explore')} trailingIcon={ArrowRight}>Browse experts</Btn>
@@ -1886,22 +1875,6 @@ const LandingPage = ({ onNavigate, isAuthed }) => {
           <div className="hidden md:grid grid-cols-2 gap-3">
             {['warm-orange','deep-teal','soft-saffron','blush'].map((tone, i) => (
               <CoverArt key={i} tone={tone} className={`rounded-2xl ${i===1?'mt-6':''}`} style={{ aspectRatio:'1', height:'auto' }}/>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="py-20 px-8" style={{ background:T.bgSurface }}>
-        <div className="max-w-6xl mx-auto">
-          <h2 className="text-3xl font-medium mb-2" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>What are you looking for?</h2>
-          <p className="mb-10" style={{ color:T.ink700 }}>Six categories of vetted local experts in Doha.</p>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-            {features.map(f => (
-              <button key={f.title} onClick={() => onNavigate('explore')} className="rounded-2xl p-5 text-left hover:shadow-md hover:-translate-y-0.5 transition-all" style={{ background:T.bgBase, border:`1px solid ${T.border}` }}>
-                <div className="text-3xl mb-3">{f.icon}</div>
-                <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{f.title}</div>
-                <div className="text-xs mt-1" style={{ color:T.ink500 }}>{f.desc}</div>
-              </button>
             ))}
           </div>
         </div>
@@ -3043,6 +3016,130 @@ const ProviderProfilePage = ({ user, providers, onProviderUpdate, onNavigate }) 
 };
 
 // ============================================================
+// AVAILABILITY PICKER (calendar pop-up for per-service hours)
+// ============================================================
+const AvailabilityPickerModal = ({ open, onClose, initialHours, onSave }) => {
+  const blank = { 0:[], 1:[], 2:[], 3:[], 4:[], 5:[], 6:[] };
+  const [hours, setHours] = useState(initialHours || blank);
+  const [selectedDay, setSelectedDay] = useState(1);
+  useEffect(() => { if (open) setHours(initialHours || blank); }, [open, initialHours]);
+
+  const DAY_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  // 06:00 → 22:00 hourly grid (extend if needed)
+  const HOUR_SLOTS = Array.from({ length: 17 }, (_, i) => `${String(i + 6).padStart(2,'0')}:00`);
+
+  const dayHours = hours[selectedDay] || [];
+  const totalSlots = Object.values(hours).reduce((s, h) => s + h.length, 0);
+
+  const toggleHour = (h) => {
+    setHours(p => {
+      const day = p[selectedDay] || [];
+      if (day.includes(h)) return { ...p, [selectedDay]: day.filter(x => x !== h) };
+      return { ...p, [selectedDay]: [...day, h].sort() };
+    });
+  };
+  const setRange = (start, end) => {
+    const slots = HOUR_SLOTS.filter(h => {
+      const hr = Number(h.split(':')[0]);
+      return hr >= start && hr <= end;
+    });
+    setHours(p => ({ ...p, [selectedDay]: slots }));
+  };
+  const copyToDays = (targetDays) => {
+    const day = hours[selectedDay] || [];
+    setHours(p => {
+      const next = { ...p };
+      targetDays.forEach(d => { next[d] = [...day]; });
+      return next;
+    });
+    showToast(`Copied to ${targetDays.length} day${targetDays.length === 1 ? '' : 's'}`, 'success');
+  };
+  const clearDay = () => setHours(p => ({ ...p, [selectedDay]: [] }));
+  const clearAll = () => setHours(blank);
+
+  return (
+    <Modal open={open} onClose={onClose} title="Set service availability" maxWidth={580}>
+      <div className="p-6 flex flex-col gap-4">
+        <p className="text-xs" style={{ color: T.ink500 }}>Pick which days &amp; hours this service is bookable. Tap any time slot to toggle it on or off.</p>
+
+        {/* Day-of-week picker */}
+        <div>
+          <div className="text-[10px] uppercase font-medium mb-2 tracking-wider" style={{ color: T.ink500 }}>Day</div>
+          <div className="grid grid-cols-7 gap-1.5">
+            {DAY_SHORT.map((d, i) => {
+              const isSelected = selectedDay === i;
+              const count = (hours[i] || []).length;
+              return (
+                <button key={i} onClick={() => setSelectedDay(i)} className="flex flex-col items-center py-2 rounded-lg transition-colors" style={{ background: isSelected ? T.primary : count > 0 ? T.primary100 : T.bgMuted, color: isSelected ? '#fff' : count > 0 ? T.primary : T.ink500 }}>
+                  <span className="text-xs font-semibold">{d}</span>
+                  <span className="text-[10px] mt-0.5 opacity-90">{count > 0 ? `${count}h` : '—'}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Hour toggle grid */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[10px] uppercase font-medium tracking-wider" style={{ color: T.ink500 }}>{DAY_NAMES[selectedDay]} · time slots</div>
+            <button onClick={clearDay} className="text-[11px]" style={{ color: T.danger }}>Clear day</button>
+          </div>
+          <div className="grid grid-cols-6 gap-1.5">
+            {HOUR_SLOTS.map(h => {
+              const isOn = dayHours.includes(h);
+              return (
+                <button key={h} onClick={() => toggleHour(h)} className="py-2 rounded-lg text-xs font-medium font-mono" style={{ background: isOn ? T.primary : T.bgSurface, color: isOn ? '#fff' : T.ink700, border: `1px solid ${isOn ? T.primary : T.border}` }}>
+                  {h}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex gap-1.5 mt-2 flex-wrap">
+            <button onClick={() => setRange(9, 12)} className="text-[11px] font-medium px-2.5 py-1 rounded-full" style={{ background: T.bgMuted, color: T.ink700 }}>Morning</button>
+            <button onClick={() => setRange(13, 17)} className="text-[11px] font-medium px-2.5 py-1 rounded-full" style={{ background: T.bgMuted, color: T.ink700 }}>Afternoon</button>
+            <button onClick={() => setRange(18, 22)} className="text-[11px] font-medium px-2.5 py-1 rounded-full" style={{ background: T.bgMuted, color: T.ink700 }}>Evening</button>
+            <button onClick={() => setRange(6, 22)} className="text-[11px] font-medium px-2.5 py-1 rounded-full" style={{ background: T.bgMuted, color: T.ink700 }}>Full day</button>
+          </div>
+        </div>
+
+        {/* Copy buttons */}
+        <div>
+          <div className="text-[10px] uppercase font-medium mb-2 tracking-wider" style={{ color: T.ink500 }}>Copy {DAY_NAMES[selectedDay]} to…</div>
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={() => copyToDays([0,1,2,3,4])} className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ background: T.primary100, color: T.primary }}>All weekdays</button>
+            <button onClick={() => copyToDays([5,6])} className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ background: T.primary100, color: T.primary }}>Weekend (Fri-Sat)</button>
+            <button onClick={() => copyToDays([0,1,2,3,4,5,6])} className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ background: T.primary100, color: T.primary }}>Every day</button>
+            <button onClick={clearAll} className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ background: T.bgMuted, color: T.danger }}>Clear everything</button>
+          </div>
+        </div>
+
+        {/* Weekly summary */}
+        <div className="rounded-xl p-3" style={{ background: T.bgMuted }}>
+          <div className="text-[10px] uppercase font-medium mb-1.5 tracking-wider" style={{ color: T.ink500 }}>Weekly summary · {totalSlots} slot{totalSlots === 1 ? '' : 's'} total</div>
+          {DAY_SHORT.map((d, i) => {
+            const dayHs = hours[i] || [];
+            return (
+              <div key={i} className="flex justify-between text-xs py-0.5">
+                <span style={{ color: T.ink500 }}>{d}</span>
+                <span style={{ color: dayHs.length ? T.ink900 : T.ink300, fontFamily: dayHs.length ? 'monospace' : 'inherit' }}>
+                  {dayHs.length === 0 ? 'Closed' : dayHs.length <= 4 ? dayHs.join(', ') : `${dayHs[0]} – ${dayHs[dayHs.length-1]} (${dayHs.length})`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="px-6 py-4 flex gap-3 border-t" style={{ borderColor: T.border }}>
+        <Btn variant="outline" onClick={onClose} className="flex-1">Cancel</Btn>
+        <Btn onClick={() => { onSave(hours); onClose(); }} className="flex-1" leadingIcon={Check}>Save availability</Btn>
+      </div>
+    </Modal>
+  );
+};
+
+// ============================================================
 // ADVANCED SERVICE EDITOR (per-service deep customization)
 // ============================================================
 const SectionAccordion = ({ title, sub, defaultOpen = false, children }) => {
@@ -3062,6 +3159,7 @@ const AdvancedServiceCard = ({ service, onUpdate, onRemove, userId }) => {
   // Defensive: make sure every field exists so the editor never crashes on legacy data
   const s = normalizeService(service);
   const [uploadingThumb, setUploadingThumb] = useState(false);
+  const [availabilityOpen, setAvailabilityOpen] = useState(false);
   const handleThumb = async (file) => {
     if (!file || !userId) return;
     setUploadingThumb(true);
@@ -3165,18 +3263,45 @@ const AdvancedServiceCard = ({ service, onUpdate, onRemove, userId }) => {
           </div>
         </div>
         <div>
-          <label className="text-[10px] uppercase font-medium block mb-1" style={{ color:T.ink500 }}>Custom hours (#3) — comma-separated times per day, leave blank to inherit your default availability</label>
+          <label className="text-[10px] uppercase font-medium block mb-1" style={{ color:T.ink500 }}>Custom hours (#3) — when is this specific service available?</label>
+          <AvailabilityPickerModal
+            open={availabilityOpen}
+            onClose={() => setAvailabilityOpen(false)}
+            initialHours={s.customHours}
+            onSave={(hrs) => onUpdate('customHours', hrs)}
+          />
           {!useCustomHours ? (
-            <button type="button" onClick={initHours} className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ background:T.primary100, color:T.primary }}>Set custom hours for this service</button>
+            <button
+              type="button"
+              onClick={() => { initHours(); setAvailabilityOpen(true); }}
+              className="rounded-lg flex items-center gap-3 px-4 py-3 text-left w-full"
+              style={{ background: T.primary100, color: T.primary, border: `1px solid ${T.primary}33` }}
+            >
+              <CalendarIcon size={16}/>
+              <div className="flex-1">
+                <div className="text-sm font-semibold">Open availability picker</div>
+                <div className="text-[10px] opacity-80">Inherits your default hours · tap to override for this service</div>
+              </div>
+              <ChevronRight size={14}/>
+            </button>
           ) : (
-            <div className="flex flex-col gap-1">
-              {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((dn, day) => (
-                <div key={day} className="flex items-center gap-2">
-                  <span className="text-xs w-10" style={{ color:T.ink500 }}>{dn}</span>
-                  <input value={(s.customHours[day] || []).join(', ')} onChange={e => setHoursForDay(day, e.target.value)} placeholder="10:00, 12:00, 14:00" className="flex-1 py-1 px-2 rounded text-xs outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => setAvailabilityOpen(true)}
+                className="rounded-lg flex items-center gap-3 px-4 py-3 text-left w-full"
+                style={{ background: T.bgSurface, border: `1px solid ${T.border}` }}
+              >
+                <CalendarIcon size={16} style={{ color: T.primary }}/>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold" style={{ color: T.ink900 }}>Open availability picker</div>
+                  <div className="text-[10px] mt-0.5" style={{ color: T.ink500 }}>
+                    {Object.values(s.customHours || {}).reduce((sum, h) => sum + (h?.length || 0), 0)} slot(s) configured · tap to edit
+                  </div>
                 </div>
-              ))}
-              <button type="button" onClick={() => onUpdate('customHours', null)} className="text-xs self-start mt-1" style={{ color:T.danger }}>Use my default hours instead</button>
+                <ChevronRight size={14} style={{ color: T.ink500 }}/>
+              </button>
+              <button type="button" onClick={() => onUpdate('customHours', null)} className="text-xs self-start" style={{ color: T.danger }}>Use my default hours instead</button>
             </div>
           )}
         </div>
