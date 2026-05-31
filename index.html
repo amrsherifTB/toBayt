@@ -375,6 +375,10 @@ const mapBooking = (row) => row ? ({
   depositAmount: row.deposit_amount || 0,
   packageSessions: row.package_sessions || null,
   isOnline: !!row.is_online,
+  batchId: row.batch_id || null,
+  isLeadBooking: !!row.is_lead_booking,
+  packageLabel: row.package_label || null,
+  discountAmount: row.discount_amount || 0,
   providerId: row.provider_id,
   providerName: row.provider_name,
   providerCover: row.provider_cover,
@@ -412,6 +416,10 @@ async function insertBooking(b) {
     deposit_amount: b.depositAmount || 0,
     package_sessions: b.packageSessions || null,
     is_online: !!b.isOnline,
+    batch_id: b.batchId || null,
+    is_lead_booking: !!b.isLeadBooking,
+    package_label: b.packageLabel || null,
+    discount_amount: b.discountAmount || 0,
     provider_id: b.providerId,
     provider_name: b.providerName,
     provider_cover: b.providerCover,
@@ -1506,7 +1514,18 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
   const addOnTotal = (service?.addOns || []).filter(a => selectedAddOns.includes(a.id)).reduce((s, a) => s + Number(a.price || 0), 0);
   const serviceFee = locType === 'online' ? 0 : 12;
   const totalServiceFee = serviceFee * Math.max(1, selectedSlots.length);
-  const total = sessionsSubtotal + addOnTotal + totalServiceFee;
+
+  // ----- Package discounts (#13) -----
+  const availablePackages = ((service?.packages) || [])
+    .filter(p => p.sessions > 0 && p.discountPercent > 0)
+    .sort((a, b) => b.sessions - a.sessions); // largest first so we pick the best match
+  // Best package the client currently qualifies for (must have ≥ N slots picked)
+  const matchedPackage = availablePackages.find(p => selectedSlots.length >= p.sessions);
+  // Next-tier package they could unlock by picking more slots
+  const nextPackage = availablePackages.slice().reverse().find(p => selectedSlots.length < p.sessions);
+  const packageDiscount = matchedPackage ? Math.round(sessionsSubtotal * matchedPackage.discountPercent / 100) : 0;
+
+  const total = sessionsSubtotal + addOnTotal + totalServiceFee - packageDiscount;
   const depositAmount = service?.depositPercent ? Math.round(total * service.depositPercent / 100) : 0;
 
   // ----- Slot / calendar (#1, #3, #5, #6) -----
@@ -1561,7 +1580,7 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
       onComplete({
         service,
         locType,
-        sessions: sessionLines, // array of { date, slot, price, note }
+        sessions: sessionLines,
         isCustom,
         selectedAddOns: (service?.addOns || []).filter(a => selectedAddOns.includes(a.id)),
         intakeAnswers,
@@ -1569,6 +1588,8 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
         depositAmount,
         addOnTotal,
         serviceFeePerSession: serviceFee,
+        packageDiscount,
+        packageLabel: matchedPackage ? `${matchedPackage.sessions}-session bundle · ${matchedPackage.discountPercent}% off` : null,
         total,
         isOnline: locType === 'online',
       });
@@ -1676,6 +1697,29 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
           <div>
             <h3 className="text-lg font-semibold mb-1" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Pick one or more times</h3>
             <p className="text-xs mb-3" style={{ color:T.ink500 }}>Tap multiple slots to book several sessions in one go. {provider.name}'s availability · next {service?.maxAdvanceDays || 60} days{service?.minAdvanceHours > 0 ? ` · earliest in ${service.minAdvanceHours}h` : ''}</p>
+
+            {/* Package suggestions (#13) */}
+            {availablePackages.length > 0 && (
+              <div className="rounded-xl p-3 mb-3" style={{ background: matchedPackage ? '#E0F2E7' : T.accent100, border: `1px solid ${matchedPackage ? T.success+'33' : T.accent+'33'}` }}>
+                {matchedPackage ? (
+                  <div className="flex items-center gap-2 text-xs" style={{ color: '#286B3D' }}>
+                    <Check size={14}/>
+                    <span><strong>{matchedPackage.discountPercent}% package discount applied</strong> — {matchedPackage.sessions}-session bundle. Save QAR {packageDiscount}.{nextPackage && ` Add ${nextPackage.sessions - selectedSlots.length} more session${nextPackage.sessions - selectedSlots.length === 1 ? '' : 's'} to upgrade to ${nextPackage.discountPercent}%.`}</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-xs" style={{ color: T.accent600 }}>
+                    <Sparkles size={14}/>
+                    <span>
+                      <strong>Bundle discount available:</strong>{' '}
+                      {availablePackages.map((p, i) => (
+                        <span key={i}>{i > 0 ? ' · ' : ''}{p.sessions} sessions = <strong>{p.discountPercent}% off</strong></span>
+                      ))}
+                      . Pick at least {availablePackages[availablePackages.length-1].sessions} slot{availablePackages[availablePackages.length-1].sessions === 1 ? '' : 's'} to unlock.
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Chips of selected slots */}
             {selectedSlots.length > 0 && (
@@ -1787,10 +1831,22 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
                   <div key={a.id} className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>+ {a.name}</span><span style={{ color:T.ink900 }}>QAR {a.price}</span></div>
                 ))}
                 <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service fee ({sessionLines.length} × QAR {serviceFee})</span><span style={{ color:T.ink900 }}>{serviceFee === 0 ? <span style={{color:T.success}}>Waived</span> : `QAR ${totalServiceFee}`}</span></div>
+                {packageDiscount > 0 && matchedPackage && (
+                  <div className="flex justify-between text-sm" style={{ color: T.success }}>
+                    <span>📦 {matchedPackage.sessions}-session package ({matchedPackage.discountPercent}% off)</span>
+                    <span>−QAR {packageDiscount}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-sm font-semibold pt-2 border-t" style={{ borderColor:T.border }}>
                   <span style={{ color:T.ink900 }}>Total</span>
                   <span style={{ color:T.ink900 }}>QAR {total}</span>
                 </div>
+                {sessionLines.length > 1 && (
+                  <div className="flex items-center gap-1.5 text-[11px] mt-1" style={{ color: T.primary }}>
+                    <ShieldCheck size={12}/>
+                    <span>Paid as one payment of QAR {total} — covers all {sessionLines.length} sessions.</span>
+                  </div>
+                )}
                 {depositAmount > 0 && (
                   <div className="flex justify-between text-xs pt-1" style={{ color:T.accent600 }}><span>Deposit charged on accept ({service.depositPercent}%)</span><span>QAR {depositAmount}</span></div>
                 )}
@@ -1838,7 +1894,10 @@ const PaymentModal = ({ booking, onClose, onSuccess }) => {
       <div className="p-6">
         <div className="text-center mb-6">
           <div className="text-4xl font-semibold" style={{ color:T.ink900, fontFamily:'Fraunces,serif' }}>QAR {total}</div>
-          <div className="text-sm mt-1" style={{ color:T.ink500 }}>{booking.serviceTitle}</div>
+          <div className="text-sm mt-1" style={{ color:T.ink500 }}>{(booking.serviceTitle || '').replace(/\s*\(\d+\/\d+\)\s*$/, '')}</div>
+          {booking.isBatchPayment && booking.batchBookings && (
+            <div className="text-xs mt-2 inline-block px-3 py-1 rounded-full" style={{ background: T.primary100, color: T.primary }}>📦 Covers {booking.batchBookings.length} sessions</div>
+          )}
         </div>
         <div className="flex flex-col gap-2 mb-4">
           {methods.map(m => (
@@ -2185,7 +2244,24 @@ const BookingsPage = ({ bookings, onNavigate, onPay, onCancel, onReschedule, pro
   const now = Date.now();
   const upcoming = bookings.filter(b => !['cancelled','completed','rejected'].includes(b.status) && new Date(b.date).getTime() > now);
   const past = bookings.filter(b => ['completed','cancelled','rejected'].includes(b.status) || new Date(b.date).getTime() <= now);
-  const list = tab === 'upcoming' ? upcoming : past;
+  // Group bookings into batches so multi-session orders show as a single card with one Pay button
+  const groupBookings = (arr) => {
+    const groups = {};
+    const items = [];
+    arr.forEach(b => {
+      if (b.batchId) {
+        if (!groups[b.batchId]) { groups[b.batchId] = { batchId: b.batchId, sessions: [], lead: null }; items.push(groups[b.batchId]); }
+        groups[b.batchId].sessions.push(b);
+        if (b.isLeadBooking) groups[b.batchId].lead = b;
+      } else {
+        items.push({ single: b });
+      }
+    });
+    // Sort sessions within each batch by date
+    items.forEach(item => { if (item.sessions) item.sessions.sort((a, b) => new Date(a.date) - new Date(b.date)); });
+    return items;
+  };
+  const list = groupBookings(tab === 'upcoming' ? upcoming : past);
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
       <h1 className="text-2xl font-semibold mb-6" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>My bookings</h1>
@@ -2202,29 +2278,95 @@ const BookingsPage = ({ bookings, onNavigate, onPay, onCancel, onReschedule, pro
         </div>
       )}
       <div className="flex flex-col gap-3">
-        {list.map(b => (
-          <div key={b.id} className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
-            <div className="flex items-start gap-4">
-              <CoverArt tone={b.providerCover} className="w-12 h-12 rounded-xl flex-shrink-0"/>
-              <div className="flex-1">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="font-semibold" style={{ color:T.ink900 }}>{b.providerName}</div>
-                    <div className="text-sm" style={{ color:T.ink500 }}>{b.serviceTitle}</div>
-                    <div className="text-sm mt-0.5" style={{ color:T.ink700 }}>{b.when} · <strong style={{ color:T.ink900 }}>QAR {b.total}</strong></div>
+        {list.map((item, idx) => {
+          // Single booking (no batch)
+          if (item.single) {
+            const b = item.single;
+            return (
+              <div key={b.id} className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+                <div className="flex items-start gap-4">
+                  <CoverArt tone={b.providerCover} className="w-12 h-12 rounded-xl flex-shrink-0"/>
+                  <div className="flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-semibold" style={{ color:T.ink900 }}>{b.providerName}</div>
+                        <div className="text-sm" style={{ color:T.ink500 }}>{b.serviceTitle}</div>
+                        <div className="text-sm mt-0.5" style={{ color:T.ink700 }}>{b.when} · <strong style={{ color:T.ink900 }}>QAR {b.total}</strong></div>
+                      </div>
+                      <StatusBadge status={b.status}/>
+                    </div>
+                    <div className="mt-3 flex gap-2 flex-wrap">
+                      {b.status === 'approved' && <Btn size="sm" onClick={() => onPay(b.id)}>Pay QAR {b.total}</Btn>}
+                      <Btn size="sm" variant="outline" leadingIcon={MessageSquare} onClick={() => onNavigate('messages', { bookingId: b.id })}>Message</Btn>
+                      {['pending','confirmed','approved'].includes(b.status) && <Btn size="sm" variant="ghost" onClick={() => onReschedule(b)}>Reschedule</Btn>}
+                      {['pending','confirmed','approved'].includes(b.status) && <Btn size="sm" variant="ghost" onClick={() => onCancel(b.id, b.total)} style={{ color:T.danger }}>Cancel</Btn>}
+                    </div>
                   </div>
-                  <StatusBadge status={b.status}/>
                 </div>
-                <div className="mt-3 flex gap-2 flex-wrap">
-                  {b.status === 'approved' && <Btn size="sm" onClick={() => onPay(b.id)}>Pay QAR {b.total}</Btn>}
-                  <Btn size="sm" variant="outline" leadingIcon={MessageSquare} onClick={() => onNavigate('messages', { bookingId: b.id })}>Message</Btn>
-                  {['pending','confirmed','approved'].includes(b.status) && <Btn size="sm" variant="ghost" onClick={() => onReschedule(b)}>Reschedule</Btn>}
-                  {['pending','confirmed','approved'].includes(b.status) && <Btn size="sm" variant="ghost" onClick={() => onCancel(b.id, b.total)} style={{ color:T.danger }}>Cancel</Btn>}
+              </div>
+            );
+          }
+          // Batch — multi-session order
+          const lead = item.lead || item.sessions[0];
+          const approvedSessions = item.sessions.filter(b => b.status === 'approved');
+          const payableTotal = approvedSessions.reduce((s, b) => s + Number(b.total || 0), 0);
+          const batchTotal = item.sessions.reduce((s, b) => s + Number(b.total || 0), 0);
+          const anyApproved = approvedSessions.length > 0;
+          const allPaid = item.sessions.every(b => ['confirmed','completed'].includes(b.status));
+          const allCancelled = item.sessions.every(b => ['cancelled','rejected'].includes(b.status));
+          const cleanTitle = (lead.serviceTitle || '').replace(/\s*\(\d+\/\d+\)\s*$/, '');
+          return (
+            <div key={item.batchId} className="rounded-2xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+              <div className="flex items-start gap-4">
+                <CoverArt tone={lead.providerCover} className="w-12 h-12 rounded-xl flex-shrink-0"/>
+                <div className="flex-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold" style={{ color:T.ink900 }}>{lead.providerName}</span>
+                        <Pill bg={T.primary100} color={T.primary}>📦 {item.sessions.length}-session bundle</Pill>
+                        {lead.packageLabel && <Pill bg="#E0F2E7" color={T.success}>{lead.packageLabel}</Pill>}
+                      </div>
+                      <div className="text-sm mt-0.5" style={{ color:T.ink500 }}>{cleanTitle}</div>
+                    </div>
+                    {allPaid ? <Pill bg="#E0F2E7" color={T.success}>All paid</Pill>
+                      : allCancelled ? <StatusBadge status="cancelled"/>
+                      : anyApproved ? <Pill bg="#FFF4D6" color="#9C7A18">Ready to pay</Pill>
+                      : <StatusBadge status={lead.status}/>}
+                  </div>
+
+                  {/* Per-session list */}
+                  <div className="mt-3 flex flex-col gap-1">
+                    {item.sessions.map((s, i) => (
+                      <div key={s.id} className="flex items-center justify-between text-xs rounded-lg px-3 py-2" style={{ background: T.bgMuted }}>
+                        <span style={{ color: T.ink900 }}>Session {i+1} · {s.when}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono" style={{ color: T.ink900 }}>QAR {s.total}</span>
+                          <StatusBadge status={s.status}/>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Batch total */}
+                  <div className="mt-2 flex justify-between text-sm font-semibold">
+                    <span style={{ color: T.ink500 }}>Total ({item.sessions.length} session{item.sessions.length === 1 ? '' : 's'})</span>
+                    <span style={{ color: T.ink900 }}>QAR {batchTotal}</span>
+                  </div>
+
+                  <div className="mt-3 flex gap-2 flex-wrap">
+                    {anyApproved && !allPaid && (
+                      <Btn size="sm" onClick={() => onPay(approvedSessions[0].id)}>
+                        Pay QAR {payableTotal} for {approvedSessions.length} approved session{approvedSessions.length === 1 ? '' : 's'}
+                      </Btn>
+                    )}
+                    <Btn size="sm" variant="outline" leadingIcon={MessageSquare} onClick={() => onNavigate('messages', { bookingId: lead.id })}>Message</Btn>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -4786,15 +4928,18 @@ function App() {
     const sessions = data.sessions || [{ date: data.date, slot: data.slot, price: data.service?.price || 0 }];
     const sessionCount = sessions.length;
     const serviceFee = data.serviceFeePerSession ?? (data.locType === 'online' ? 0 : 12);
-    // Add-ons charged once across the whole batch — attached to the first booking only
     const addOnTotal = data.addOnTotal || 0;
+    const packageDiscount = data.packageDiscount || 0;
+    // All N bookings share this batch id so we can pay for them as one
+    const batchId = (sessionCount > 1 || packageDiscount > 0) ? (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2,10)}`) : null;
 
     const createdBookings = [];
     try {
       for (let i = 0; i < sessions.length; i++) {
         const ses = sessions[i];
         const isFirst = i === 0;
-        const sessionTotal = ses.price + serviceFee + (isFirst ? addOnTotal : 0);
+        // Per-session price; first booking absorbs add-ons + discount so the SUM equals data.total
+        const sessionTotal = ses.price + serviceFee + (isFirst ? addOnTotal - packageDiscount : 0);
         const newBooking = {
           userId: user?.id && user.id !== 'admin-shortcut' ? user.id : null,
           clientName: user?.name || null,
@@ -4808,17 +4953,19 @@ function App() {
           when: `${fmtDateShort(ses.date)} · ${ses.slot}`,
           locType: data.locType,
           isOnline: !!data.isOnline,
-          // Add-ons + intake + notes go on the FIRST booking only (avoid duplication)
           selectedAddOns: isFirst ? (data.selectedAddOns || []) : [],
           intakeAnswers: isFirst ? (data.intakeAnswers || {}) : {},
           clientNotes: isFirst ? (data.clientNotes || null) : null,
           depositAmount: isFirst ? (data.depositAmount || 0) : 0,
+          batchId,
+          isLeadBooking: isFirst && batchId !== null,
+          packageLabel: isFirst ? (data.packageLabel || null) : null,
+          discountAmount: isFirst ? packageDiscount : 0,
           total: sessionTotal,
           status: 'pending',
         };
         const created = await insertBooking(newBooking);
         createdBookings.push(created);
-        // Seed system message for each booking
         try {
           const sysMsg = await insertMessage({ bookingId: created.id, from:'system', system:true, icon:'calendar', text: sessionCount > 1 ? `Booking request ${i+1} of ${sessionCount} sent to ${created.providerName}` : `Booking request sent to ${created.providerName}` });
           setThreads(p => ({ ...p, [created.id]: sysMsg ? [sysMsg] : [] }));
@@ -4833,17 +4980,45 @@ function App() {
     goto('bookings');
   };
 
-  const handlePay = (id) => setPaymentModal(bookings.find(b => b.id === id));
+  const handlePay = (id) => {
+    const target = bookings.find(b => b.id === id);
+    if (!target) return;
+    // If this booking is part of a batch, charge ONLY the approved sessions (skip rejected/cancelled)
+    if (target.batchId) {
+      const batchBookings = bookings.filter(b => b.batchId === target.batchId && b.status === 'approved');
+      if (batchBookings.length === 0) return; // nothing to pay
+      const batchTotal = batchBookings.reduce((s, b) => s + Number(b.total || 0), 0);
+      setPaymentModal({ ...target, total: batchTotal, batchBookings, isBatchPayment: true });
+    } else {
+      setPaymentModal(target);
+    }
+  };
   const handlePaymentSuccess = async (method) => {
-    const id = paymentModal?.id;
+    if (!paymentModal) return;
     try {
-      const updated = await updateBooking(id, { status:'confirmed', paymentMethod: method });
-      setBookings(p => p.map(b => b.id === id ? updated : b));
+      if (paymentModal.isBatchPayment && paymentModal.batchBookings) {
+        // Confirm every booking in the batch
+        const ids = paymentModal.batchBookings.map(b => b.id);
+        await sb.from('bookings').update({ status:'confirmed', payment_method: method }).in('id', ids);
+        setBookings(p => p.map(b => ids.includes(b.id) ? { ...b, status:'confirmed' } : b));
+        showToast(`Payment confirmed · ${ids.length} sessions booked!`, 'success');
+      } else {
+        const id = paymentModal.id;
+        const updated = await updateBooking(id, { status:'confirmed', paymentMethod: method });
+        setBookings(p => p.map(b => b.id === id ? updated : b));
+        showToast('Payment confirmed!', 'success');
+      }
     } catch (e) {
-      setBookings(p => p.map(b => b.id === id ? { ...b, status:'confirmed' } : b));
+      // Fall back to local update if Supabase rejects
+      if (paymentModal.isBatchPayment) {
+        const ids = paymentModal.batchBookings.map(b => b.id);
+        setBookings(p => p.map(b => ids.includes(b.id) ? { ...b, status:'confirmed' } : b));
+      } else {
+        setBookings(p => p.map(b => b.id === paymentModal.id ? { ...b, status:'confirmed' } : b));
+      }
+      showToast('Payment confirmed (with sync error)', 'success');
     }
     setPaymentModal(null);
-    showToast('Payment confirmed!', 'success');
   };
 
   const handleCancel = async (id, refund) => {
