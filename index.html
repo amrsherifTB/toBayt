@@ -285,6 +285,36 @@ async function fetchProviderByUserId(userId) {
   return mapProvider(data);
 }
 
+// Ensure every service has full v2 defaults so old data doesn't break the editor
+function normalizeService(s) {
+  return {
+    id: s.id || `s-${Math.random().toString(36).slice(2,8)}`,
+    title: s.title || '',
+    duration: Number(s.duration) || 60,
+    price: Number(s.price) || 0,
+    locType: s.locType || 'both',
+    description: s.description || '',
+    whatToBring: s.whatToBring || '',
+    thumbnailUrl: s.thumbnailUrl || null,
+    groupCapacity: Math.max(1, Number(s.groupCapacity) || 1),
+    customHours: s.customHours || null, // null = inherit provider default; otherwise { 0: ['10:00'...], ... }
+    minAdvanceHours: Number(s.minAdvanceHours) || 0,
+    maxAdvanceDays: Number(s.maxAdvanceDays) || 60,
+    allowOnline: !!s.allowOnline,
+    introPrice: s.introPrice ? Number(s.introPrice) : null,
+    introCount: Number(s.introCount) || 0,
+    weekendPrice: s.weekendPrice ? Number(s.weekendPrice) : null,
+    addOns: Array.isArray(s.addOns) ? s.addOns : [],
+    depositPercent: Math.min(100, Math.max(0, Number(s.depositPercent) || 0)),
+    packages: Array.isArray(s.packages) ? s.packages : [],
+    skillLevel: s.skillLevel || 'any', // 'any' | 'beginner' | 'intermediate' | 'advanced'
+    languages: Array.isArray(s.languages) ? s.languages : [],
+    intakeQuestions: Array.isArray(s.intakeQuestions) ? s.intakeQuestions : [],
+    freeConsultation: !!s.freeConsultation,
+    cancellationPolicy: s.cancellationPolicy || 'standard', // 'standard' | 'flexible' | 'strict'
+  };
+}
+
 // ----- POSTS -----
 const mapPost = (row) => row ? ({
   id: row.id,
@@ -339,6 +369,12 @@ const mapBooking = (row) => row ? ({
   userId: row.user_id,
   clientName: row.client_name || null,
   clientEmail: row.client_email || null,
+  selectedAddOns: Array.isArray(row.selected_add_ons) ? row.selected_add_ons : [],
+  intakeAnswers: row.intake_answers || {},
+  clientNotes: row.client_notes || null,
+  depositAmount: row.deposit_amount || 0,
+  packageSessions: row.package_sessions || null,
+  isOnline: !!row.is_online,
   providerId: row.provider_id,
   providerName: row.provider_name,
   providerCover: row.provider_cover,
@@ -370,6 +406,12 @@ async function insertBooking(b) {
     user_id: b.userId || null,
     client_name: b.clientName || null,
     client_email: b.clientEmail || null,
+    selected_add_ons: b.selectedAddOns || [],
+    intake_answers: b.intakeAnswers || {},
+    client_notes: b.clientNotes || null,
+    deposit_amount: b.depositAmount || 0,
+    package_sessions: b.packageSessions || null,
+    is_online: !!b.isOnline,
     provider_id: b.providerId,
     provider_name: b.providerName,
     provider_cover: b.providerCover,
@@ -1414,7 +1456,7 @@ const PostCard = ({ post, providers, onBook, onBookCollab, onProvider }) => {
 // ============================================================
 // BOOKING MODAL
 // ============================================================
-const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSlots = [] }) => {
+const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSlots = [], userBookings = [] }) => {
   const [step, setStep] = useState(0);
   const [serviceId, setServiceId] = useState(initialServiceId || provider?.services?.[0]?.id);
   const [isCustom, setIsCustom] = useState(false);
@@ -1425,17 +1467,99 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
   const [locType, setLocType] = useState('client_home');
   const [selectedDate, setSelectedDate] = useState(null);
   const [slot, setSlot] = useState(null);
+  const [selectedAddOns, setSelectedAddOns] = useState([]);
+  const [intakeAnswers, setIntakeAnswers] = useState({});
+  const [clientNotes, setClientNotes] = useState('');
   if (!provider) return null;
   const customValid = customTitle.trim().length >= 3 && customDesc.trim().length >= 10 && customPrice && Number(customPrice) > 0;
-  const service = isCustom
+  const rawService = isCustom
     ? { id:'custom', title: customTitle.trim() || 'Custom request', duration: Number(customDuration) || 60, price: Number(customPrice) || 0, description: customDesc.trim(), isCustom: true, locType:'both' }
     : provider.services?.find(s => s.id === serviceId);
+  const service = rawService ? normalizeService(rawService) : null;
+
+  // ----- Pricing (#10) -----
+  const priorCount = service ? userBookings.filter(b => b.providerId === provider.id && b.serviceId === service.id && ['completed','confirmed','approved'].includes(b.status)).length : 0;
+  const isWeekend = selectedDate ? [5,6].includes(selectedDate.getDay()) : false;
+  let effectivePrice = service?.price || 0;
+  let pricingNote = null;
+  if (service?.introPrice && priorCount < (service.introCount || 0)) {
+    effectivePrice = service.introPrice;
+    pricingNote = `Intro rate (session ${priorCount+1} of ${service.introCount})`;
+  } else if (service?.weekendPrice && isWeekend) {
+    effectivePrice = service.weekendPrice;
+    pricingNote = 'Weekend rate (Fri/Sat)';
+  } else if (service?.freeConsultation && priorCount === 0) {
+    effectivePrice = 0;
+    pricingNote = 'Free initial consultation';
+  }
+  const addOnTotal = (service?.addOns || []).filter(a => selectedAddOns.includes(a.id)).reduce((s, a) => s + Number(a.price || 0), 0);
+  const subtotal = effectivePrice + addOnTotal;
+  const serviceFee = locType === 'online' ? 0 : 12;
+  const total = subtotal + serviceFee;
+  const depositAmount = service?.depositPercent ? Math.round(total * service.depositPercent / 100) : 0;
+
+  // ----- Slot / calendar (#1, #3, #5, #6) -----
   const dayKey = selectedDate ? fmtDateKey(selectedDate) : null;
-  const takenForDay = dayKey ? takenSlots.filter(t => t.startsWith(dayKey + 'T')).map(t => t.split('T')[1]) : [];
-  const slotsForDay = (selectedDate ? getAvailableSlots(provider.id, selectedDate) : []).filter(t => !takenForDay.includes(t));
-  const canContinue = step===0 ? (isCustom ? customValid : !!serviceId) : step===1 ? !!locType : step===2 ? (selectedDate && slot) : true;
-  const stepLabels = ['Service','Location','Time','Review'];
-  const next = () => step < 3 ? setStep(step+1) : onComplete({ service, locType, date: selectedDate, slot, isCustom });
+  let baseSlotsForDay = [];
+  if (selectedDate && service) {
+    // Custom hours override provider default
+    if (service.customHours) {
+      baseSlotsForDay = (service.customHours[selectedDate.getDay()] || []).slice();
+    } else {
+      baseSlotsForDay = getAvailableSlots(provider.id, selectedDate);
+    }
+    // Min advance hours
+    if (service.minAdvanceHours > 0) {
+      const cutoff = new Date(Date.now() + service.minAdvanceHours * 3600 * 1000);
+      baseSlotsForDay = baseSlotsForDay.filter(t => {
+        const [h,m] = t.split(':').map(Number);
+        const slotDt = new Date(selectedDate); slotDt.setHours(h, m, 0, 0);
+        return slotDt > cutoff;
+      });
+    }
+  }
+  // Slot filter: same-service group capacity check
+  const slotsForDay = baseSlotsForDay.filter(t => {
+    const conflicts = takenSlots.filter(ts => ts.slot === `${dayKey}T${t}`);
+    if (conflicts.length === 0) return true;
+    if (!service) return false;
+    // All conflicts must be the same service AND under capacity for group bookings
+    const sameSvc = conflicts.every(c => c.serviceId === service.id);
+    if (sameSvc && service.groupCapacity > 1 && conflicts.length < service.groupCapacity) return true;
+    return false;
+  });
+  // Max advance days — disable dates outside window
+  const maxAdvanceDate = service ? addDays(TODAY, service.maxAdvanceDays || 60) : addDays(TODAY, 60);
+
+  // ----- Step plumbing — dynamic step count based on add-ons / intake -----
+  const hasAddOns = (service?.addOns || []).length > 0;
+  const hasIntake = (service?.intakeQuestions || []).length > 0;
+  const dynamicSteps = ['Service', service?.allowOnline || locType ? 'Location' : null, 'Time', hasAddOns ? 'Add-ons' : null, hasIntake ? 'Intake' : null, 'Review'].filter(Boolean);
+  const stepLabels = dynamicSteps;
+  const currentLabel = stepLabels[step];
+  const intakeValid = !hasIntake || (service?.intakeQuestions || []).every(q => !q.required || (intakeAnswers[q.id] || '').toString().trim().length > 0);
+  const canContinue = currentLabel === 'Service' ? (isCustom ? customValid : !!serviceId)
+    : currentLabel === 'Location' ? !!locType
+    : currentLabel === 'Time' ? (selectedDate && slot)
+    : currentLabel === 'Add-ons' ? true
+    : currentLabel === 'Intake' ? intakeValid
+    : true;
+
+  const next = () => {
+    if (currentLabel === 'Review') {
+      onComplete({
+        service: { ...service, price: effectivePrice }, // pass effective price
+        locType, date: selectedDate, slot, isCustom,
+        selectedAddOns: (service?.addOns || []).filter(a => selectedAddOns.includes(a.id)),
+        intakeAnswers, clientNotes,
+        depositAmount,
+        total,
+        isOnline: locType === 'online',
+      });
+    } else {
+      setStep(step + 1);
+    }
+  };
   const prev = () => step > 0 ? setStep(step-1) : onClose();
   return (
     <Modal open onClose={onClose} maxWidth={600}>
@@ -1453,18 +1577,40 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
           <div><div className="text-sm font-semibold" style={{ color: T.ink900 }}>{provider.name}</div><div className="text-xs" style={{ color: T.ink500 }}>{provider.specialty}</div></div>
         </div>
 
-        {step === 0 && (
+        {currentLabel === 'Service' && (
           <div>
             <h3 className="text-lg font-semibold mb-4" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Choose a service</h3>
             <div className="flex flex-col gap-2">
-              {provider.services?.map(s => (
-                <button key={s.id} onClick={() => { setIsCustom(false); setServiceId(s.id); }} className="text-left rounded-xl p-4" style={{ background:T.bgSurface, border:`2px solid ${!isCustom && serviceId===s.id ? T.primary : T.border}` }}>
-                  <div className="flex items-start justify-between">
-                    <div><div className="text-sm font-semibold" style={{ color:T.ink900 }}>{s.title}</div><div className="text-xs mt-0.5" style={{ color:T.ink500 }}>{s.duration} min · {s.locType === 'client_home' ? 'At your place' : s.locType === 'both' ? 'Flexible' : 'At studio'}</div></div>
-                    <div className="text-base font-semibold" style={{ color:T.ink900 }}>QAR {s.price}</div>
-                  </div>
-                </button>
-              ))}
+              {provider.services?.map(rs => {
+                const n = normalizeService(rs);
+                const selected = !isCustom && serviceId === n.id;
+                return (
+                  <button key={n.id} onClick={() => { setIsCustom(false); setServiceId(n.id); }} className="text-left rounded-xl p-4" style={{ background:T.bgSurface, border:`2px solid ${selected ? T.primary : T.border}` }}>
+                    <div className="flex items-start gap-3">
+                      {n.thumbnailUrl ? <img src={n.thumbnailUrl} alt="" className="w-14 h-14 rounded-lg object-cover flex-shrink-0" style={{ border:`1px solid ${T.border}` }}/> : null}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{n.title}</div>
+                        {n.description && <div className="text-xs mt-0.5 line-clamp-2" style={{ color:T.ink700 }}>{n.description}</div>}
+                        <div className="text-xs mt-1 flex flex-wrap items-center gap-1.5" style={{ color:T.ink500 }}>
+                          <span>{n.duration} min</span>
+                          <span>·</span>
+                          <span>{n.locType === 'client_home' ? "At your place" : n.locType === 'both' ? 'Flexible' : 'At studio'}</span>
+                          {n.groupCapacity > 1 && <><span>·</span><Pill bg={T.accent100} color={T.accent600}>Group up to {n.groupCapacity}</Pill></>}
+                          {n.allowOnline && <><span>·</span><Pill bg={T.primary100} color={T.primary}>Online OK</Pill></>}
+                          {n.skillLevel !== 'any' && <Pill bg={T.bgMuted} color={T.ink700}>{n.skillLevel}</Pill>}
+                          {n.languages.length > 0 && <Pill bg={T.bgMuted} color={T.ink700}>{n.languages.join('/')}</Pill>}
+                          {n.freeConsultation && <Pill bg={T.success} color="#fff">Free 1st session</Pill>}
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div className="text-base font-semibold" style={{ color:T.ink900 }}>QAR {n.price}</div>
+                        {n.introPrice && <div className="text-[10px]" style={{ color:T.accent600 }}>Intro QAR {n.introPrice}</div>}
+                        {n.weekendPrice && <div className="text-[10px]" style={{ color:T.ink500 }}>Weekend QAR {n.weekendPrice}</div>}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
               <button onClick={() => setIsCustom(true)} className="text-left rounded-xl p-4 flex items-center gap-3" style={{ background: isCustom ? T.bgSurface : 'transparent', border:`2px ${isCustom ? 'solid' : 'dashed'} ${isCustom ? T.accent : T.border}` }}>
                 <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: isCustom ? T.accent100 : T.bgMuted }}>
                   <Sparkles size={16} style={{ color: isCustom ? T.accent600 : T.ink500 }}/>
@@ -1481,18 +1627,23 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
                   </div>
                 </div>
               )}
+              {service?.whatToBring && (
+                <div className="rounded-xl p-3 mt-2 text-xs" style={{ background:T.bgMuted, color:T.ink700 }}>
+                  <strong>What to bring:</strong> {service.whatToBring}
+                </div>
+              )}
             </div>
           </div>
         )}
-        {step === 1 && (
+        {currentLabel === 'Location' && (
           <div>
             <h3 className="text-lg font-semibold mb-4" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Where should we meet?</h3>
             <div className="flex flex-col gap-2">
               {[
-                { id:'client_home', icon:Home, label:'At my home', sub:'Your saved address' },
-                { id:'provider_location', icon:MapPin, label:`At ${provider.name}'s location`, sub:provider.city },
-                { id:'online', icon:MessageSquare, label:'Online', sub:'Video call · link sent 15 min before' },
-              ].map(o => {
+                service?.locType !== 'provider_location' && { id:'client_home', icon:Home, label:'At my home', sub:'Your saved address' },
+                service?.locType !== 'client_home'    && { id:'provider_location', icon:MapPin, label:`At ${provider.name}'s location`, sub:provider.city },
+                service?.allowOnline                  && { id:'online', icon:MessageSquare, label:'Online', sub:'Video call · link sent 15 min before' },
+              ].filter(Boolean).map(o => {
                 const Icon = o.icon;
                 return (
                   <button key={o.id} onClick={() => setLocType(o.id)} className="text-left rounded-xl p-4 flex items-center gap-3" style={{ background:T.bgSurface, border:`2px solid ${locType===o.id ? T.primary : T.border}` }}>
@@ -1505,26 +1656,70 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
             </div>
           </div>
         )}
-        {step === 2 && (
+        {currentLabel === 'Time' && (
           <div>
             <h3 className="text-lg font-semibold mb-1" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Pick a time</h3>
-            <p className="text-xs mb-4" style={{ color:T.ink500 }}>{provider.name}'s availability · next 60 days</p>
+            <p className="text-xs mb-4" style={{ color:T.ink500 }}>{provider.name}'s availability · next {service?.maxAdvanceDays || 60} days{service?.minAdvanceHours > 0 ? ` · earliest in ${service.minAdvanceHours}h` : ''}</p>
             <RealCalendar providerId={provider.id} selectedDate={selectedDate} onSelect={d => { setSelectedDate(d); setSlot(null); }}/>
             {selectedDate && (
               <div className="mt-4">
                 <div className="text-xs font-medium uppercase tracking-wider mb-2" style={{ color:T.ink500 }}>Available times · {fmtDateLong(selectedDate)}</div>
                 {slotsForDay.length === 0 ? <p className="text-sm" style={{ color:T.ink500 }}>No times available on this day.</p> : (
                   <div className="grid grid-cols-4 gap-2">
-                    {slotsForDay.map(t => (
-                      <button key={t} onClick={() => setSlot(t)} className="py-2.5 rounded-lg text-sm font-medium" style={{ background: slot===t ? T.primary : T.bgSurface, color: slot===t ? '#fff' : T.ink900, border:`1px solid ${slot===t ? T.primary : T.border}` }}>{t}</button>
-                    ))}
+                    {slotsForDay.map(t => {
+                      const conflictCount = takenSlots.filter(ts => ts.slot === `${dayKey}T${t}` && ts.serviceId === service?.id).length;
+                      const left = service?.groupCapacity > 1 ? (service.groupCapacity - conflictCount) : null;
+                      return (
+                        <button key={t} onClick={() => setSlot(t)} className="py-2 rounded-lg text-xs font-medium" style={{ background: slot===t ? T.primary : T.bgSurface, color: slot===t ? '#fff' : T.ink900, border:`1px solid ${slot===t ? T.primary : T.border}` }}>
+                          {t}
+                          {left !== null && <div className="text-[9px] mt-0.5 opacity-80">{left} spot{left===1?'':'s'} left</div>}
+                        </button>
+                      );
+                    })}
                   </div>
+                )}
+                {isWeekend && service?.weekendPrice && (
+                  <div className="mt-3 rounded-lg p-3 text-xs" style={{ background:T.accent100, color:T.accent600 }}>Weekend rate: QAR {service.weekendPrice} applies for Friday/Saturday.</div>
                 )}
               </div>
             )}
           </div>
         )}
-        {step === 3 && service && (
+        {currentLabel === 'Add-ons' && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Add anything extra?</h3>
+            <div className="flex flex-col gap-2">
+              {(service?.addOns || []).map(a => {
+                const sel = selectedAddOns.includes(a.id);
+                return (
+                  <button key={a.id} onClick={() => setSelectedAddOns(p => sel ? p.filter(x => x !== a.id) : [...p, a.id])} className="text-left rounded-xl p-4 flex items-center gap-3" style={{ background:T.bgSurface, border:`2px solid ${sel ? T.primary : T.border}` }}>
+                    <div className="w-7 h-7 rounded flex items-center justify-center" style={{ background: sel ? T.primary : T.bgMuted }}>
+                      {sel && <Check size={14} color="#fff"/>}
+                    </div>
+                    <div className="flex-1"><div className="text-sm font-medium" style={{ color:T.ink900 }}>{a.name}</div></div>
+                    <div className="text-sm font-semibold" style={{ color:T.ink900 }}>+QAR {a.price}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-xs mt-3 text-center" style={{ color:T.ink500 }}>Optional. Tap to add to your booking.</p>
+          </div>
+        )}
+        {currentLabel === 'Intake' && (
+          <div>
+            <h3 className="text-lg font-semibold mb-2" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Before we book…</h3>
+            <p className="text-xs mb-4" style={{ color:T.ink500 }}>{provider.name} wants to know a few things to prepare for your session.</p>
+            <div className="flex flex-col gap-3">
+              {(service?.intakeQuestions || []).map(q => (
+                <div key={q.id}>
+                  <label className="text-xs font-medium block mb-1" style={{ color:T.ink900 }}>{q.question} {q.required && <span style={{ color:T.danger }}>*</span>}</label>
+                  <textarea value={intakeAnswers[q.id] || ''} onChange={e => setIntakeAnswers(p => ({ ...p, [q.id]: e.target.value }))} rows={2} className="w-full py-2 px-3 rounded-lg text-sm outline-none resize-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}` }}/>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {currentLabel === 'Review' && service && (
           <div>
             <h3 className="text-lg font-semibold mb-4" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Review your booking</h3>
             <div className="rounded-xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
@@ -1533,24 +1728,38 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
                 <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>When</span><span style={{ color:T.ink900 }}>{selectedDate && slot ? `${fmtDateShort(selectedDate)} · ${slot}` : '—'}</span></div>
                 <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Duration</span><span style={{ color:T.ink900 }}>{service.duration} min</span></div>
                 <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Where</span><span style={{ color:T.ink900 }}>{locType==='client_home'?'Your home':locType==='online'?'Online · video call':`${provider.name}'s location`}</span></div>
+                {service.groupCapacity > 1 && <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Group</span><span style={{ color:T.ink900 }}>Up to {service.groupCapacity} clients per slot</span></div>}
               </div>
               <div className="flex flex-col gap-2">
-                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service price</span><span style={{ color:T.ink900 }}>QAR {service.price}</span></div>
-                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service fee</span><span style={{ color:T.ink900 }}>{locType==='online'?<span style={{color:T.success}}>Waived</span>:'QAR 12'}</span></div>
+                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service price{pricingNote ? ` (${pricingNote})` : ''}</span><span style={{ color:T.ink900 }}>QAR {effectivePrice}</span></div>
+                {(service.addOns || []).filter(a => selectedAddOns.includes(a.id)).map(a => (
+                  <div key={a.id} className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>+ {a.name}</span><span style={{ color:T.ink900 }}>QAR {a.price}</span></div>
+                ))}
+                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service fee</span><span style={{ color:T.ink900 }}>{serviceFee === 0 ? <span style={{color:T.success}}>Waived</span> : `QAR ${serviceFee}`}</span></div>
                 <div className="flex justify-between text-sm font-semibold pt-2 border-t" style={{ borderColor:T.border }}>
                   <span style={{ color:T.ink900 }}>Total</span>
-                  <span style={{ color:T.ink900 }}>QAR {service.price + (locType==='online'?0:12)}</span>
+                  <span style={{ color:T.ink900 }}>QAR {total}</span>
                 </div>
+                {depositAmount > 0 && (
+                  <div className="flex justify-between text-xs pt-1" style={{ color:T.accent600 }}><span>Deposit charged on accept ({service.depositPercent}%)</span><span>QAR {depositAmount}</span></div>
+                )}
               </div>
+            </div>
+            <div className="mt-3">
+              <label className="text-xs font-medium block mb-1" style={{ color:T.ink500 }}>Anything else {provider.name} should know? (optional)</label>
+              <textarea value={clientNotes} onChange={e => setClientNotes(e.target.value)} rows={2} placeholder="e.g. I have a back injury, please go gentle" className="w-full py-2 px-3 rounded-lg text-sm outline-none resize-none" style={{ background:T.bgMuted, border:`1px solid ${T.border}` }}/>
+            </div>
+            <div className="mt-3 rounded-xl p-3 text-xs" style={{ background:T.bgMuted, color:T.ink700 }}>
+              <strong>Cancellation:</strong> {service.cancellationPolicy === 'flexible' ? 'Full refund up to 6h before.' : service.cancellationPolicy === 'strict' ? 'No refund inside 48h.' : 'Full refund ≥24h before, 50% 2–24h before.'}
             </div>
             <p className="mt-3 text-xs text-center" style={{ color:T.ink500 }}>Your card is charged only after the provider accepts.</p>
           </div>
         )}
       </div>
       <div className="px-6 py-4 flex gap-3 border-t" style={{ borderColor:T.border }}>
-        <Btn variant="outline" onClick={prev}>{step === 0 ? 'Cancel' : 'Back'}</Btn>
-        <Btn className="flex-1" onClick={next} disabled={!canContinue} trailingIcon={step===3 ? Check : ArrowRight}>
-          {step===3 ? 'Request booking' : 'Continue'}
+        <Btn variant="outline" onClick={() => step === 0 ? onClose() : setStep(step - 1)}>{step === 0 ? 'Cancel' : 'Back'}</Btn>
+        <Btn className="flex-1" onClick={next} disabled={!canContinue} trailingIcon={currentLabel === 'Review' ? Check : ArrowRight}>
+          {currentLabel === 'Review' ? 'Request booking' : 'Continue'}
         </Btn>
       </div>
     </Modal>
@@ -1899,16 +2108,33 @@ const ProviderPage = ({ provider, onNavigate, onBook, onMessage }) => {
           <p className="mt-4 text-sm leading-relaxed" style={{ color:T.ink700 }}>{provider.bio}</p>
           <h2 className="mt-8 text-lg font-semibold mb-3" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Services</h2>
           <div className="flex flex-col gap-3">
-            {provider.services?.map(s => (
-              <div key={s.id} className="rounded-xl p-4 flex items-center gap-4" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
-                <div className="flex-1">
-                  <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{s.title}</div>
-                  <div className="text-xs mt-0.5" style={{ color:T.ink500 }}>{s.duration} min · {s.locType === 'client_home' ? 'At your place' : s.locType === 'both' ? 'Flexible' : 'At their location'}</div>
+            {provider.services?.map(rs => {
+              const s = normalizeService(rs);
+              return (
+                <div key={s.id} className="rounded-xl p-4 flex items-start gap-4" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+                  {s.thumbnailUrl ? <img src={s.thumbnailUrl} alt="" className="w-20 h-20 rounded-lg object-cover flex-shrink-0" style={{ border:`1px solid ${T.border}` }}/> : null}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{s.title}</div>
+                    {s.description && <p className="text-xs mt-1 line-clamp-2" style={{ color:T.ink700 }}>{s.description}</p>}
+                    <div className="text-xs mt-1.5 flex flex-wrap items-center gap-1.5" style={{ color:T.ink500 }}>
+                      <span>{s.duration} min</span>
+                      <span>·</span>
+                      <span>{s.locType === 'client_home' ? "Client's place" : s.locType === 'both' ? 'Flexible' : 'At their location'}</span>
+                      {s.groupCapacity > 1 && <><span>·</span><Pill bg={T.accent100} color={T.accent600}>Group {s.groupCapacity}</Pill></>}
+                      {s.allowOnline && <Pill bg={T.primary100} color={T.primary}>Online OK</Pill>}
+                      {s.skillLevel !== 'any' && <Pill bg={T.bgMuted} color={T.ink700}>{s.skillLevel}</Pill>}
+                      {s.languages.length > 0 && <Pill bg={T.bgMuted} color={T.ink700}>{s.languages.join('/')}</Pill>}
+                      {s.freeConsultation && <Pill bg={T.success} color="#fff">Free 1st</Pill>}
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className="text-base font-semibold" style={{ color:T.ink900 }}>QAR {s.price}</div>
+                    {s.introPrice && <div className="text-[10px]" style={{ color:T.accent600 }}>Intro QAR {s.introPrice}</div>}
+                  </div>
+                  <Btn size="sm" onClick={() => onBook(s.id)}>Book</Btn>
                 </div>
-                <div className="text-base font-semibold" style={{ color:T.ink900 }}>QAR {s.price}</div>
-                <Btn size="sm" onClick={() => onBook(s.id)}>Book</Btn>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
         <aside>
@@ -2463,7 +2689,7 @@ const ProviderDashboard = ({ user, providers, bookings, onRefreshPosts, onNaviga
 // ============================================================
 // PROVIDER BOOKINGS PAGE
 // ============================================================
-const ProviderBookingsPage = ({ bookings, onAccept, onDecline, onComplete, onNavigate }) => {
+const ProviderBookingsPage = ({ bookings, onAccept, onDecline, onComplete, onReschedule, onNavigate }) => {
   const [tab, setTab] = useState('pending');
   const pending = bookings.filter(b => b.status === 'pending');
   const upcoming = bookings.filter(b => ['approved','confirmed'].includes(b.status));
@@ -2514,6 +2740,9 @@ const ProviderBookingsPage = ({ bookings, onAccept, onDecline, onComplete, onNav
                 )}
                 {b.status === 'confirmed' && (
                   <Btn size="sm" leadingIcon={Check} onClick={() => onComplete(b.id)}>Mark completed</Btn>
+                )}
+                {['pending','approved','confirmed'].includes(b.status) && (
+                  <Btn size="sm" variant="ghost" leadingIcon={CalendarIcon} onClick={() => onReschedule(b)}>Reschedule</Btn>
                 )}
                 <Btn size="sm" variant="outline" leadingIcon={MessageSquare} onClick={() => onNavigate('messages', { bookingId: b.id })}>Message client</Btn>
               </div>
@@ -2813,6 +3042,242 @@ const ProviderProfilePage = ({ user, providers, onProviderUpdate, onNavigate }) 
   );
 };
 
+// ============================================================
+// ADVANCED SERVICE EDITOR (per-service deep customization)
+// ============================================================
+const SectionAccordion = ({ title, sub, defaultOpen = false, children }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-t" style={{ borderColor: T.border }}>
+      <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center justify-between py-3 text-left">
+        <span><span className="text-xs font-semibold uppercase tracking-wider" style={{ color: T.ink700 }}>{title}</span>{sub && <span className="text-xs ml-2" style={{ color:T.ink500 }}>· {sub}</span>}</span>
+        <ChevronDown size={14} style={{ color: T.ink500, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}/>
+      </button>
+      {open && <div className="pb-3 flex flex-col gap-3">{children}</div>}
+    </div>
+  );
+};
+
+const AdvancedServiceCard = ({ service, onUpdate, onRemove, userId }) => {
+  const s = service;
+  const [uploadingThumb, setUploadingThumb] = useState(false);
+  const handleThumb = async (file) => {
+    if (!file || !userId) return;
+    setUploadingThumb(true);
+    try {
+      const url = await uploadToBucket('service-thumbnails', file, userId);
+      onUpdate('thumbnailUrl', url);
+      showToast('Thumbnail uploaded', 'success');
+    } catch (e) { showToast('Upload failed: ' + e.message, 'error'); }
+    setUploadingThumb(false);
+  };
+
+  // Helpers for nested arrays
+  const updateAddOn = (id, field, val) => onUpdate('addOns', s.addOns.map(a => a.id === id ? { ...a, [field]: val } : a));
+  const removeAddOn = (id) => onUpdate('addOns', s.addOns.filter(a => a.id !== id));
+  const addAddOn = () => onUpdate('addOns', [...s.addOns, { id:`a-${Math.random().toString(36).slice(2,6)}`, name:'', price: 0 }]);
+
+  const updatePackage = (i, field, val) => onUpdate('packages', s.packages.map((p, idx) => idx === i ? { ...p, [field]: val } : p));
+  const removePackage = (i) => onUpdate('packages', s.packages.filter((_, idx) => idx !== i));
+  const addPackage = () => onUpdate('packages', [...s.packages, { sessions: 4, discountPercent: 10 }]);
+
+  const updateQuestion = (id, field, val) => onUpdate('intakeQuestions', s.intakeQuestions.map(q => q.id === id ? { ...q, [field]: val } : q));
+  const removeQuestion = (id) => onUpdate('intakeQuestions', s.intakeQuestions.filter(q => q.id !== id));
+  const addQuestion = () => onUpdate('intakeQuestions', [...s.intakeQuestions, { id:`q-${Math.random().toString(36).slice(2,6)}`, question:'', required: false }]);
+
+  // Per-service hours editor (simple toggle: inherit provider default OR set custom)
+  const useCustomHours = !!s.customHours;
+  const initHours = () => onUpdate('customHours', { 0:[], 1:[], 2:[], 3:[], 4:[], 5:[], 6:[] });
+  const setHoursForDay = (day, hoursCsv) => {
+    const hours = hoursCsv.split(',').map(h => h.trim()).filter(h => /^\d{1,2}:\d{2}$/.test(h));
+    onUpdate('customHours', { ...(s.customHours || {}), [day]: hours });
+  };
+
+  return (
+    <div className="rounded-xl p-3 flex flex-col gap-2" style={{ background:T.bgMuted, border:`1px solid ${T.border}` }}>
+      {/* Basics row */}
+      <div className="flex items-start gap-2">
+        <input value={s.title} onChange={e => onUpdate('title', e.target.value)} placeholder="Service name" className="flex-1 py-2 px-3 rounded-lg text-sm outline-none font-semibold" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
+        <button type="button" onClick={onRemove} className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ color:T.danger, background:T.bgSurface }}><X size={15}/></button>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <div>
+          <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Duration (min)</label>
+          <input value={s.duration} onChange={e => onUpdate('duration', e.target.value.replace(/\D/g,''))} className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Price (QAR)</label>
+          <input value={s.price} onChange={e => onUpdate('price', e.target.value.replace(/\D/g,''))} className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Where (#8)</label>
+          <select value={s.locType} onChange={e => onUpdate('locType', e.target.value)} className="w-full py-1.5 px-2 rounded text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+            <option value="client_home">Client's place</option>
+            <option value="provider_location">My location</option>
+            <option value="both">Flexible</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Description & content (#14, #15, #16) */}
+      <SectionAccordion title="Description & thumbnail" sub={s.thumbnailUrl ? '✓ thumbnail' : ''}>
+        <div className="flex gap-3 items-center">
+          {s.thumbnailUrl ? <img src={s.thumbnailUrl} alt="" className="w-16 h-16 rounded-lg object-cover" style={{ border:`1px solid ${T.border}` }}/>
+            : <div className="w-16 h-16 rounded-lg flex items-center justify-center" style={{ background:T.bgSurface, border:`1px dashed ${T.border}`, color:T.ink500 }}><Camera size={18}/></div>}
+          <label className="cursor-pointer text-xs font-medium px-3 py-2 rounded-lg" style={{ background:T.primary100, color:T.primary }}>
+            {uploadingThumb ? 'Uploading…' : s.thumbnailUrl ? 'Change thumbnail' : 'Upload thumbnail'}
+            <input type="file" accept="image/*" className="hidden" onChange={e => handleThumb(e.target.files?.[0])}/>
+          </label>
+          {s.thumbnailUrl && <button type="button" onClick={() => onUpdate('thumbnailUrl', null)} className="text-xs" style={{ color:T.danger }}>Remove</button>}
+        </div>
+        <div>
+          <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Description (#14)</label>
+          <textarea value={s.description} onChange={e => onUpdate('description', e.target.value)} rows={3} placeholder="What this service includes, what makes it special…" className="w-full py-2 px-3 rounded text-sm outline-none resize-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>What client should bring / prepare (#15)</label>
+          <textarea value={s.whatToBring} onChange={e => onUpdate('whatToBring', e.target.value)} rows={2} placeholder="e.g. comfortable clothes, water, any equipment they need" className="w-full py-2 px-3 rounded text-sm outline-none resize-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+        </div>
+      </SectionAccordion>
+
+      {/* Group & availability (#1, #3, #5, #6) */}
+      <SectionAccordion title="Group & availability rules" sub={s.groupCapacity > 1 ? `group of ${s.groupCapacity}` : 'solo'}>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Group capacity (#1)</label>
+            <input value={s.groupCapacity} onChange={e => onUpdate('groupCapacity', Math.max(1, Number(e.target.value.replace(/\D/g,'')) || 1))} className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+            <div className="text-[10px] mt-0.5" style={{ color:T.ink500 }}>1 = solo · &gt;1 = multiple clients per slot</div>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Min advance hours (#5)</label>
+            <input value={s.minAdvanceHours} onChange={e => onUpdate('minAdvanceHours', Number(e.target.value.replace(/\D/g,'')) || 0)} className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Max advance days (#6)</label>
+            <input value={s.maxAdvanceDays} onChange={e => onUpdate('maxAdvanceDays', Number(e.target.value.replace(/\D/g,'')) || 60)} className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+          </div>
+          <div className="flex items-end">
+            <label className="flex items-center gap-2 text-sm" style={{ color:T.ink900 }}>
+              <input type="checkbox" checked={s.allowOnline} onChange={e => onUpdate('allowOnline', e.target.checked)}/>
+              Allow online (#9)
+            </label>
+          </div>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase font-medium block mb-1" style={{ color:T.ink500 }}>Custom hours (#3) — comma-separated times per day, leave blank to inherit your default availability</label>
+          {!useCustomHours ? (
+            <button type="button" onClick={initHours} className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ background:T.primary100, color:T.primary }}>Set custom hours for this service</button>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((dn, day) => (
+                <div key={day} className="flex items-center gap-2">
+                  <span className="text-xs w-10" style={{ color:T.ink500 }}>{dn}</span>
+                  <input value={(s.customHours[day] || []).join(', ')} onChange={e => setHoursForDay(day, e.target.value)} placeholder="10:00, 12:00, 14:00" className="flex-1 py-1 px-2 rounded text-xs outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+                </div>
+              ))}
+              <button type="button" onClick={() => onUpdate('customHours', null)} className="text-xs self-start mt-1" style={{ color:T.danger }}>Use my default hours instead</button>
+            </div>
+          )}
+        </div>
+      </SectionAccordion>
+
+      {/* Pricing, deposit, add-ons, packages (#10, #11, #12, #13) */}
+      <SectionAccordion title="Pricing, add-ons & packages">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Intro price (#10)</label>
+            <input value={s.introPrice || ''} onChange={e => onUpdate('introPrice', e.target.value ? Number(e.target.value.replace(/\D/g,'')) : null)} placeholder="optional" className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+            <div className="text-[10px] mt-0.5" style={{ color:T.ink500 }}>QAR for first-time clients</div>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Intro count</label>
+            <input value={s.introCount} onChange={e => onUpdate('introCount', Number(e.target.value.replace(/\D/g,'')) || 0)} className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+            <div className="text-[10px] mt-0.5" style={{ color:T.ink500 }}># of sessions at intro price</div>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Weekend price (Fri/Sat)</label>
+            <input value={s.weekendPrice || ''} onChange={e => onUpdate('weekendPrice', e.target.value ? Number(e.target.value.replace(/\D/g,'')) : null)} placeholder="optional" className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Deposit % required (#12)</label>
+            <input value={s.depositPercent} onChange={e => onUpdate('depositPercent', Math.min(100, Math.max(0, Number(e.target.value.replace(/\D/g,'')) || 0)))} className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[10px] uppercase font-medium mb-1" style={{ color:T.ink500 }}>Add-ons (#11)</div>
+          {s.addOns.map(a => (
+            <div key={a.id} className="flex gap-2 mb-1.5">
+              <input value={a.name} onChange={e => updateAddOn(a.id, 'name', e.target.value)} placeholder="Add-on name" className="flex-1 py-1.5 px-2 rounded text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+              <input value={a.price} onChange={e => updateAddOn(a.id, 'price', Number(e.target.value.replace(/\D/g,'')) || 0)} placeholder="QAR" className="w-20 py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+              <button type="button" onClick={() => removeAddOn(a.id)} className="w-8 h-8 rounded flex items-center justify-center" style={{ color:T.danger, background:T.bgSurface }}><X size={13}/></button>
+            </div>
+          ))}
+          <button type="button" onClick={addAddOn} className="text-xs font-medium px-2.5 py-1.5 rounded-lg" style={{ background:T.primary100, color:T.primary }}><Plus size={11} className="inline"/> Add an add-on</button>
+        </div>
+
+        <div>
+          <div className="text-[10px] uppercase font-medium mb-1" style={{ color:T.ink500 }}>Recurring packages (#13)</div>
+          {s.packages.map((p, i) => (
+            <div key={i} className="flex gap-2 mb-1.5 items-center">
+              <input value={p.sessions} onChange={e => updatePackage(i, 'sessions', Number(e.target.value.replace(/\D/g,'')) || 0)} placeholder="N sessions" className="w-24 py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+              <span className="text-xs" style={{ color:T.ink500 }}>sessions, save</span>
+              <input value={p.discountPercent} onChange={e => updatePackage(i, 'discountPercent', Number(e.target.value.replace(/\D/g,'')) || 0)} className="w-16 py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+              <span className="text-xs" style={{ color:T.ink500 }}>%</span>
+              <button type="button" onClick={() => removePackage(i)} className="w-8 h-8 rounded flex items-center justify-center" style={{ color:T.danger, background:T.bgSurface }}><X size={13}/></button>
+            </div>
+          ))}
+          <button type="button" onClick={addPackage} className="text-xs font-medium px-2.5 py-1.5 rounded-lg" style={{ background:T.primary100, color:T.primary }}><Plus size={11} className="inline"/> Add a package</button>
+        </div>
+      </SectionAccordion>
+
+      {/* Detail tags (#17, #18, #20) */}
+      <SectionAccordion title="Tags & extras" sub={`${s.skillLevel}${s.languages.length ? ` · ${s.languages.join(', ')}` : ''}${s.freeConsultation ? ' · free intro' : ''}`}>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Skill level (#17)</label>
+            <select value={s.skillLevel} onChange={e => onUpdate('skillLevel', e.target.value)} className="w-full py-1.5 px-2 rounded text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+              <option value="any">Any level</option>
+              <option value="beginner">Beginner</option>
+              <option value="intermediate">Intermediate</option>
+              <option value="advanced">Advanced</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Languages (#18, comma-separated)</label>
+            <input value={s.languages.join(', ')} onChange={e => onUpdate('languages', e.target.value.split(',').map(x => x.trim()).filter(Boolean))} placeholder="English, Arabic" className="w-full py-1.5 px-2 rounded text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+          </div>
+        </div>
+        <label className="flex items-center gap-2 text-sm" style={{ color:T.ink900 }}>
+          <input type="checkbox" checked={s.freeConsultation} onChange={e => onUpdate('freeConsultation', e.target.checked)}/>
+          Offer a free initial consultation (#20)
+        </label>
+      </SectionAccordion>
+
+      {/* Intake form (#19) */}
+      <SectionAccordion title="Intake form (#19)" sub={s.intakeQuestions.length ? `${s.intakeQuestions.length} question(s)` : 'none'}>
+        {s.intakeQuestions.map(q => (
+          <div key={q.id} className="flex gap-2 mb-1.5 items-center">
+            <input value={q.question} onChange={e => updateQuestion(q.id, 'question', e.target.value)} placeholder="Question for client (e.g. allergies?)" className="flex-1 py-1.5 px-2 rounded text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}/>
+            <label className="text-xs flex items-center gap-1" style={{ color:T.ink700 }}><input type="checkbox" checked={q.required} onChange={e => updateQuestion(q.id, 'required', e.target.checked)}/> Required</label>
+            <button type="button" onClick={() => removeQuestion(q.id)} className="w-8 h-8 rounded flex items-center justify-center" style={{ color:T.danger, background:T.bgSurface }}><X size={13}/></button>
+          </div>
+        ))}
+        <button type="button" onClick={addQuestion} className="text-xs font-medium px-2.5 py-1.5 rounded-lg self-start" style={{ background:T.primary100, color:T.primary }}><Plus size={11} className="inline"/> Add a question</button>
+      </SectionAccordion>
+
+      {/* Cancellation policy (#22) */}
+      <SectionAccordion title="Cancellation policy (#22)" sub={s.cancellationPolicy}>
+        <select value={s.cancellationPolicy} onChange={e => onUpdate('cancellationPolicy', e.target.value)} className="w-full py-2 px-3 rounded text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
+          <option value="flexible">Flexible — full refund up to 6h before</option>
+          <option value="standard">Standard — full refund ≥24h before, 50% 2-24h before</option>
+          <option value="strict">Strict — no refund inside 48h</option>
+        </select>
+      </SectionAccordion>
+    </div>
+  );
+};
+
 // Collabs tab — provider can create bundles with other providers
 const CollabsTab = ({ me, isOwner }) => {
   const [collabs, setCollabs] = useState([]);
@@ -2980,19 +3445,13 @@ const ProviderProfileTabs = ({ me, user, onProviderUpdate, onNavigate }) => {
 
   const isOwner = user?.id === me?.userId;
 
-  const addService = () => setDraft(s => [...s, { id:`s-${Math.random().toString(36).slice(2,8)}`, title:'New Service', duration:60, price:100, locType:'both' }]);
+  const addService = () => setDraft(s => [...s, normalizeService({ title:'New Service', price:100 })]);
   const updateService = (id, field, val) => setDraft(s => s.map(x => x.id === id ? { ...x, [field]: val } : x));
   const removeService = (id) => setDraft(s => s.filter(x => x.id !== id));
 
   const saveServices = async () => {
     try {
-      const cleaned = draft.map(s => ({
-        id: s.id || `s-${Math.random().toString(36).slice(2,8)}`,
-        title: s.title || 'Untitled',
-        duration: Number(s.duration) || 60,
-        price: Number(s.price) || 0,
-        locType: s.locType || 'both',
-      }));
+      const cleaned = draft.map(normalizeService);
       const updated = await updateProviderRecord(me.id, { services: cleaned });
       onProviderUpdate(updated);
       setEditing(false);
@@ -3032,32 +3491,7 @@ const ProviderProfileTabs = ({ me, user, onProviderUpdate, onNavigate }) => {
             </div>
           ) : (
             <div className="flex flex-col gap-3">
-              {draft.map((s, i) => (
-                <div key={s.id} className="rounded-xl p-3 flex flex-col gap-2" style={{ background:T.bgMuted, border:`1px solid ${T.border}` }}>
-                  <div className="flex items-start gap-2">
-                    <input value={s.title} onChange={e => updateService(s.id, 'title', e.target.value)} placeholder="Service name" className="flex-1 py-2 px-3 rounded-lg text-sm outline-none font-semibold" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
-                    <button onClick={() => removeService(s.id)} className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ color:T.danger, background:T.bgSurface }}><X size={15}/></button>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Duration (min)</label>
-                      <input value={s.duration} onChange={e => updateService(s.id, 'duration', e.target.value.replace(/\D/g,''))} type="text" className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
-                    </div>
-                    <div>
-                      <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Price (QAR)</label>
-                      <input value={s.price} onChange={e => updateService(s.id, 'price', e.target.value.replace(/\D/g,''))} type="text" className="w-full py-1.5 px-2 rounded text-sm outline-none font-mono" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}/>
-                    </div>
-                    <div>
-                      <label className="text-[10px] uppercase font-medium block mb-0.5" style={{ color:T.ink500 }}>Where</label>
-                      <select value={s.locType} onChange={e => updateService(s.id, 'locType', e.target.value)} className="w-full py-1.5 px-2 rounded text-sm outline-none" style={{ background:T.bgSurface, border:`1px solid ${T.border}`, color:T.ink900 }}>
-                        <option value="client_home">Client's place</option>
-                        <option value="provider_location">My location</option>
-                        <option value="both">Flexible</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-              ))}
+              {draft.map(s => <AdvancedServiceCard key={s.id} service={s} onUpdate={(field, val) => updateService(s.id, field, val)} onRemove={() => removeService(s.id)} userId={user?.id}/>)}
               <button onClick={addService} className="rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2" style={{ background:T.bgSurface, border:`2px dashed ${T.border}`, color:T.primary }}>
                 <Plus size={15}/> Add service
               </button>
@@ -4060,6 +4494,54 @@ function App() {
 
   useEffect(() => { refreshData(); }, [refreshData]);
 
+  // ============================================================
+  // LIVE UPDATES — Supabase Realtime subscriptions
+  // Pushes new messages and booking status changes into local state
+  // without needing a refresh.
+  // ============================================================
+  useEffect(() => {
+    if (!user) return;
+    const channel = sb
+      .channel(`realtime-${user.id}`)
+      // New messages → append to the right thread
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+        const newMsg = mapMessage(payload.new);
+        if (!newMsg?.bookingId) return;
+        setThreads(prev => {
+          const list = prev[newMsg.bookingId] || [];
+          if (list.some(m => m.id === newMsg.id)) return prev; // dedupe sender's own echo
+          return { ...prev, [newMsg.bookingId]: [...list, newMsg] };
+        });
+      })
+      // Message read-receipt updates
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, (payload) => {
+        const updated = mapMessage(payload.new);
+        if (!updated?.bookingId) return;
+        setThreads(prev => {
+          const list = prev[updated.bookingId];
+          if (!list) return prev;
+          return { ...prev, [updated.bookingId]: list.map(m => m.id === updated.id ? updated : m) };
+        });
+      })
+      // New bookings involving me
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'bookings' }, (payload) => {
+        const b = mapBooking(payload.new);
+        if (!b) return;
+        const involvesMe = b.userId === user.id || b.providerId === user.providerId || user.role === 'admin';
+        if (!involvesMe) return;
+        setBookings(prev => prev.some(x => x.id === b.id) ? prev : [b, ...prev]);
+      })
+      // Booking status / reschedule updates
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'bookings' }, (payload) => {
+        const b = mapBooking(payload.new);
+        if (!b) return;
+        setBookings(prev => prev.map(x => x.id === b.id ? b : x));
+      })
+      .subscribe();
+
+    return () => { sb.removeChannel(channel); };
+  }, [user?.id, user?.providerId, user?.role]);
+
   // Auth handlers — note new signature: handleAuth(user) only (Supabase manages tokens internally)
   const handleAuth = (u) => {
     setUser(u);
@@ -4131,7 +4613,12 @@ function App() {
       date: data.date.toISOString(), slot: data.slot,
       when: `${fmtDateShort(data.date)} · ${data.slot}`,
       locType: data.locType,
-      total: data.service.price + (data.locType === 'online' ? 0 : 12),
+      isOnline: !!data.isOnline,
+      selectedAddOns: data.selectedAddOns || [],
+      intakeAnswers: data.intakeAnswers || {},
+      clientNotes: data.clientNotes || null,
+      depositAmount: data.depositAmount || 0,
+      total: data.total ?? (data.service.price + (data.locType === 'online' ? 0 : 12)),
       status: 'pending',
     };
     try {
@@ -4177,6 +4664,12 @@ function App() {
     } catch (e) {
       setBookings(p => p.map(b => b.id === id ? { ...b, date:newDate.toISOString(), slot:newSlot, when } : b));
     }
+    // Drop a system message so the other side sees who rescheduled and when
+    try {
+      const actor = effectiveRole === 'provider' ? 'Provider' : 'Client';
+      const sys = await insertMessage({ bookingId: id, from:'system', system:true, icon:'calendar', text:`${actor} rescheduled to ${when}` });
+      setThreads(p => ({ ...p, [id]: [...(p[id] || []), sys] }));
+    } catch (e) {}
     setRescheduleModal(null);
     showToast('Booking rescheduled!', 'success');
   };
@@ -4301,7 +4794,7 @@ function App() {
   }
   else if (effectiveRole === 'admin' && routeName === 'admin') page = <AdminPage/>;
   else if (effectiveRole === 'provider') {
-    if (routeName === 'prov-book') page = <ProviderBookingsPage bookings={bookings} onAccept={handleAcceptBooking} onDecline={handleDeclineBooking} onComplete={handleCompleteBooking} onNavigate={goto}/>;
+    if (routeName === 'prov-book') page = <ProviderBookingsPage bookings={bookings.filter(b => b.providerId === user?.providerId)} onAccept={handleAcceptBooking} onDecline={handleDeclineBooking} onComplete={handleCompleteBooking} onReschedule={b => setRescheduleModal(b)} onNavigate={goto}/>;
     else if (routeName === 'messages') page = <MessagesPage bookings={bookings} threads={threads} onSend={handleSend} onMarkRead={handleMarkRead} initialBookingId={currentRoute.bookingId} me="provider"/>;
     else if (routeName === 'prov-wallet') page = <ProviderWalletPage user={user} bookings={bookings}/>;
     else if (routeName === 'prov-profile') page = <ProviderProfilePage user={user} providers={providers} onProviderUpdate={handleProviderUpdate} onNavigate={goto}/>;
@@ -4335,9 +4828,9 @@ function App() {
       <div className={showNavbar ? 'pt-16' : ''}>
         {page}
       </div>
-      {bookingModal && <BookingModal provider={bookingModal.provider} initialServiceId={bookingModal.serviceId} onClose={() => setBookingModal(null)} onComplete={handleBookComplete} takenSlots={bookings.filter(b => b.providerId === bookingModal.provider?.id && ['pending','approved','confirmed'].includes(b.status) && b.date && b.slot).map(b => `${fmtDateKey(new Date(b.date))}T${b.slot}`)}/>}
+      {bookingModal && <BookingModal provider={bookingModal.provider} initialServiceId={bookingModal.serviceId} onClose={() => setBookingModal(null)} onComplete={handleBookComplete} userBookings={bookings.filter(b => b.userId === user?.id)} takenSlots={bookings.filter(b => b.providerId === bookingModal.provider?.id && ['pending','approved','confirmed'].includes(b.status) && b.date && b.slot).map(b => ({ slot: `${fmtDateKey(new Date(b.date))}T${b.slot}`, serviceId: b.serviceId }))}/>}
       {paymentModal && <PaymentModal booking={paymentModal} onClose={() => setPaymentModal(null)} onSuccess={handlePaymentSuccess}/>}
-      {rescheduleModal && <RescheduleModal booking={rescheduleModal} providers={providers} onClose={() => setRescheduleModal(null)} onComplete={handleRescheduleComplete} takenSlots={bookings.filter(b => b.providerId === rescheduleModal.providerId && b.id !== rescheduleModal.id && ['pending','approved','confirmed'].includes(b.status) && b.date && b.slot).map(b => `${fmtDateKey(new Date(b.date))}T${b.slot}`)}/>}
+      {rescheduleModal && <RescheduleModal booking={rescheduleModal} providers={providers} onClose={() => setRescheduleModal(null)} onComplete={handleRescheduleComplete} takenSlots={bookings.filter(b => b.providerId === rescheduleModal.providerId && b.id !== rescheduleModal.id && ['pending','approved','confirmed'].includes(b.status) && b.date && b.slot).map(b => `${fmtDateKey(new Date(b.date))}T${b.slot}`)} />}
       <ToastHost/>
     </div>
   );
