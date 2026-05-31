@@ -1463,36 +1463,50 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
   const [customDuration, setCustomDuration] = useState('60');
   const [locType, setLocType] = useState('client_home');
   const [selectedDate, setSelectedDate] = useState(null);
-  const [slot, setSlot] = useState(null);
+  // selectedSlots is the booking's source of truth. Each entry: { date: Date, slot: 'HH:MM' }
+  const [selectedSlots, setSelectedSlots] = useState([]);
   const [selectedAddOns, setSelectedAddOns] = useState([]);
   const [intakeAnswers, setIntakeAnswers] = useState({});
   const [clientNotes, setClientNotes] = useState('');
   if (!provider) return null;
+  const slotKey = (d, t) => `${fmtDateKey(d)}T${t}`;
+  const isSlotSelected = (d, t) => selectedSlots.some(x => slotKey(x.date, x.slot) === slotKey(d, t));
+  const toggleSlot = (d, t) => {
+    setSelectedSlots(p => {
+      const k = slotKey(d, t);
+      if (p.some(x => slotKey(x.date, x.slot) === k)) return p.filter(x => slotKey(x.date, x.slot) !== k);
+      return [...p, { date: d, slot: t }].sort((a, b) => slotKey(a.date, a.slot).localeCompare(slotKey(b.date, b.slot)));
+    });
+  };
+  const removeSlot = (i) => setSelectedSlots(p => p.filter((_, idx) => idx !== i));
   const customValid = customTitle.trim().length >= 3 && customDesc.trim().length >= 10 && customPrice && Number(customPrice) > 0;
   const rawService = isCustom
     ? { id:'custom', title: customTitle.trim() || 'Custom request', duration: Number(customDuration) || 60, price: Number(customPrice) || 0, description: customDesc.trim(), isCustom: true, locType:'both' }
     : provider.services?.find(s => s.id === serviceId);
   const service = rawService ? normalizeService(rawService) : null;
 
-  // ----- Pricing (#10) -----
+  // ----- Per-session pricing (#10) -----
   const priorCount = service ? userBookings.filter(b => b.providerId === provider.id && b.serviceId === service.id && ['completed','confirmed','approved'].includes(b.status)).length : 0;
-  const isWeekend = selectedDate ? [5,6].includes(selectedDate.getDay()) : false;
-  let effectivePrice = service?.price || 0;
-  let pricingNote = null;
-  if (service?.introPrice && priorCount < (service.introCount || 0)) {
-    effectivePrice = service.introPrice;
-    pricingNote = `Intro rate (session ${priorCount+1} of ${service.introCount})`;
-  } else if (service?.weekendPrice && isWeekend) {
-    effectivePrice = service.weekendPrice;
-    pricingNote = 'Weekend rate (Fri/Sat)';
-  } else if (service?.freeConsultation && priorCount === 0) {
-    effectivePrice = 0;
-    pricingNote = 'Free initial consultation';
-  }
+  const priceForSlot = (slotInfo, sessionIndex) => {
+    if (!service) return 0;
+    const d = slotInfo.date;
+    const isWeekendDay = d ? [5,6].includes(d.getDay()) : false;
+    // Intro applies to the first N "lifetime" sessions across all bookings (prior + earlier sessions in this batch)
+    const lifetimeIndex = priorCount + sessionIndex;
+    if (service.freeConsultation && lifetimeIndex === 0) return { price: 0, note: 'Free intro' };
+    if (service.introPrice && lifetimeIndex < (service.introCount || 0)) return { price: service.introPrice, note: `Intro` };
+    if (service.weekendPrice && isWeekendDay) return { price: service.weekendPrice, note: 'Weekend' };
+    return { price: service.price, note: null };
+  };
+  const sessionLines = selectedSlots.map((sl, i) => {
+    const { price, note } = priceForSlot(sl, i);
+    return { ...sl, price, note };
+  });
+  const sessionsSubtotal = sessionLines.reduce((s, x) => s + x.price, 0);
   const addOnTotal = (service?.addOns || []).filter(a => selectedAddOns.includes(a.id)).reduce((s, a) => s + Number(a.price || 0), 0);
-  const subtotal = effectivePrice + addOnTotal;
   const serviceFee = locType === 'online' ? 0 : 12;
-  const total = subtotal + serviceFee;
+  const totalServiceFee = serviceFee * Math.max(1, selectedSlots.length);
+  const total = sessionsSubtotal + addOnTotal + totalServiceFee;
   const depositAmount = service?.depositPercent ? Math.round(total * service.depositPercent / 100) : 0;
 
   // ----- Slot / calendar (#1, #3, #5, #6) -----
@@ -1537,7 +1551,7 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
   const intakeValid = !hasIntake || (service?.intakeQuestions || []).every(q => !q.required || (intakeAnswers[q.id] || '').toString().trim().length > 0);
   const canContinue = currentLabel === 'Service' ? (isCustom ? customValid : !!serviceId)
     : currentLabel === 'Location' ? !!locType
-    : currentLabel === 'Time' ? (selectedDate && slot)
+    : currentLabel === 'Time' ? selectedSlots.length >= 1
     : currentLabel === 'Add-ons' ? true
     : currentLabel === 'Intake' ? intakeValid
     : true;
@@ -1545,11 +1559,16 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
   const next = () => {
     if (currentLabel === 'Review') {
       onComplete({
-        service: { ...service, price: effectivePrice }, // pass effective price
-        locType, date: selectedDate, slot, isCustom,
+        service,
+        locType,
+        sessions: sessionLines, // array of { date, slot, price, note }
+        isCustom,
         selectedAddOns: (service?.addOns || []).filter(a => selectedAddOns.includes(a.id)),
-        intakeAnswers, clientNotes,
+        intakeAnswers,
+        clientNotes,
         depositAmount,
+        addOnTotal,
+        serviceFeePerSession: serviceFee,
         total,
         isOnline: locType === 'online',
       });
@@ -1655,9 +1674,25 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
         )}
         {currentLabel === 'Time' && (
           <div>
-            <h3 className="text-lg font-semibold mb-1" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Pick a time</h3>
-            <p className="text-xs mb-4" style={{ color:T.ink500 }}>{provider.name}'s availability · next {service?.maxAdvanceDays || 60} days{service?.minAdvanceHours > 0 ? ` · earliest in ${service.minAdvanceHours}h` : ''}</p>
-            <RealCalendar providerId={provider.id} selectedDate={selectedDate} onSelect={d => { setSelectedDate(d); setSlot(null); }}/>
+            <h3 className="text-lg font-semibold mb-1" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Pick one or more times</h3>
+            <p className="text-xs mb-3" style={{ color:T.ink500 }}>Tap multiple slots to book several sessions in one go. {provider.name}'s availability · next {service?.maxAdvanceDays || 60} days{service?.minAdvanceHours > 0 ? ` · earliest in ${service.minAdvanceHours}h` : ''}</p>
+
+            {/* Chips of selected slots */}
+            {selectedSlots.length > 0 && (
+              <div className="mb-4 rounded-xl p-3" style={{ background: T.primary100, border: `1px solid ${T.primary}33` }}>
+                <div className="text-[10px] uppercase font-medium mb-2 tracking-wider" style={{ color: T.primary }}>{selectedSlots.length} session{selectedSlots.length === 1 ? '' : 's'} selected</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedSlots.map((s, i) => (
+                    <div key={i} className="rounded-full flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium" style={{ background: T.primary, color: '#fff' }}>
+                      <span>{fmtDateShort(s.date)} · {s.slot}</span>
+                      <button onClick={() => removeSlot(i)} className="opacity-80 hover:opacity-100"><X size={11}/></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <RealCalendar providerId={provider.id} selectedDate={selectedDate} onSelect={d => setSelectedDate(d)}/>
             {selectedDate && (
               <div className="mt-4">
                 <div className="text-xs font-medium uppercase tracking-wider mb-2" style={{ color:T.ink500 }}>Available times · {fmtDateLong(selectedDate)}</div>
@@ -1666,18 +1701,20 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
                     {slotsForDay.map(t => {
                       const conflictCount = takenSlots.filter(ts => ts.slot === `${dayKey}T${t}` && ts.serviceId === service?.id).length;
                       const left = service?.groupCapacity > 1 ? (service.groupCapacity - conflictCount) : null;
+                      const selected = isSlotSelected(selectedDate, t);
                       return (
-                        <button key={t} onClick={() => setSlot(t)} className="py-2 rounded-lg text-xs font-medium" style={{ background: slot===t ? T.primary : T.bgSurface, color: slot===t ? '#fff' : T.ink900, border:`1px solid ${slot===t ? T.primary : T.border}` }}>
-                          {t}
+                        <button key={t} onClick={() => toggleSlot(selectedDate, t)} className="py-2 rounded-lg text-xs font-medium" style={{ background: selected ? T.primary : T.bgSurface, color: selected ? '#fff' : T.ink900, border:`1px solid ${selected ? T.primary : T.border}` }}>
+                          {selected && <Check size={11} className="inline mr-1"/>}{t}
                           {left !== null && <div className="text-[9px] mt-0.5 opacity-80">{left} spot{left===1?'':'s'} left</div>}
                         </button>
                       );
                     })}
                   </div>
                 )}
-                {isWeekend && service?.weekendPrice && (
-                  <div className="mt-3 rounded-lg p-3 text-xs" style={{ background:T.accent100, color:T.accent600 }}>Weekend rate: QAR {service.weekendPrice} applies for Friday/Saturday.</div>
+                {[5,6].includes(selectedDate.getDay()) && service?.weekendPrice && (
+                  <div className="mt-3 rounded-lg p-3 text-xs" style={{ background:T.accent100, color:T.accent600 }}>Weekend rate: QAR {service.weekendPrice} applies for Friday/Saturday sessions.</div>
                 )}
+                <p className="mt-3 text-[10px] text-center" style={{ color: T.ink500 }}>Done picking? Tap <strong>Continue</strong> below to add-ons or review.</p>
               </div>
             )}
           </div>
@@ -1718,21 +1755,38 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
         )}
         {currentLabel === 'Review' && service && (
           <div>
-            <h3 className="text-lg font-semibold mb-4" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Review your booking</h3>
+            <h3 className="text-lg font-semibold mb-4" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Review your booking{selectedSlots.length > 1 ? 's' : ''}</h3>
             <div className="rounded-xl p-5" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
               <div className="flex flex-col gap-3 pb-4 border-b mb-4" style={{ borderColor:T.border }}>
                 <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service</span><span style={{ color:T.ink900, fontWeight:600 }}>{service.title}</span></div>
-                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>When</span><span style={{ color:T.ink900 }}>{selectedDate && slot ? `${fmtDateShort(selectedDate)} · ${slot}` : '—'}</span></div>
-                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Duration</span><span style={{ color:T.ink900 }}>{service.duration} min</span></div>
+                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Duration</span><span style={{ color:T.ink900 }}>{service.duration} min per session</span></div>
                 <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Where</span><span style={{ color:T.ink900 }}>{locType==='client_home'?'Your home':locType==='online'?'Online · video call':`${provider.name}'s location`}</span></div>
                 {service.groupCapacity > 1 && <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Group</span><span style={{ color:T.ink900 }}>Up to {service.groupCapacity} clients per slot</span></div>}
               </div>
+
+              {/* Sessions list */}
+              <div className="mb-4">
+                <div className="text-[10px] uppercase font-medium mb-2 tracking-wider" style={{ color: T.ink500 }}>{sessionLines.length} session{sessionLines.length === 1 ? '' : 's'}</div>
+                <div className="flex flex-col gap-1.5">
+                  {sessionLines.map((s, i) => (
+                    <div key={i} className="flex justify-between items-center rounded-lg px-3 py-2 text-sm" style={{ background: T.bgMuted }}>
+                      <div>
+                        <div style={{ color: T.ink900, fontWeight: 500 }}>{fmtDateShort(s.date)} · {s.slot}</div>
+                        {s.note && <div className="text-[10px]" style={{ color: T.accent600 }}>{s.note} rate</div>}
+                      </div>
+                      <div className="font-mono" style={{ color: T.ink900 }}>QAR {s.price}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Cost breakdown */}
               <div className="flex flex-col gap-2">
-                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service price{pricingNote ? ` (${pricingNote})` : ''}</span><span style={{ color:T.ink900 }}>QAR {effectivePrice}</span></div>
+                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Sessions subtotal ({sessionLines.length})</span><span style={{ color:T.ink900 }}>QAR {sessionsSubtotal}</span></div>
                 {(service.addOns || []).filter(a => selectedAddOns.includes(a.id)).map(a => (
                   <div key={a.id} className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>+ {a.name}</span><span style={{ color:T.ink900 }}>QAR {a.price}</span></div>
                 ))}
-                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service fee</span><span style={{ color:T.ink900 }}>{serviceFee === 0 ? <span style={{color:T.success}}>Waived</span> : `QAR ${serviceFee}`}</span></div>
+                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service fee ({sessionLines.length} × QAR {serviceFee})</span><span style={{ color:T.ink900 }}>{serviceFee === 0 ? <span style={{color:T.success}}>Waived</span> : `QAR ${totalServiceFee}`}</span></div>
                 <div className="flex justify-between text-sm font-semibold pt-2 border-t" style={{ borderColor:T.border }}>
                   <span style={{ color:T.ink900 }}>Total</span>
                   <span style={{ color:T.ink900 }}>QAR {total}</span>
@@ -1749,7 +1803,7 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
             <div className="mt-3 rounded-xl p-3 text-xs" style={{ background:T.bgMuted, color:T.ink700 }}>
               <strong>Cancellation:</strong> {service.cancellationPolicy === 'flexible' ? 'Full refund up to 6h before.' : service.cancellationPolicy === 'strict' ? 'No refund inside 48h.' : 'Full refund ≥24h before, 50% 2–24h before.'}
             </div>
-            <p className="mt-3 text-xs text-center" style={{ color:T.ink500 }}>Your card is charged only after the provider accepts.</p>
+            <p className="mt-3 text-xs text-center" style={{ color:T.ink500 }}>Each session is a separate booking. The provider must accept each one — your card is charged per session.</p>
           </div>
         )}
       </div>
@@ -4729,33 +4783,53 @@ function App() {
 
   const handleBookComplete = async (data) => {
     const provider = bookingModal.provider;
-    const newBooking = {
-      userId: user?.id && user.id !== 'admin-shortcut' ? user.id : null,
-      clientName: user?.name || null,
-      clientEmail: user?.email || null,
-      providerId: provider.id,
-      providerName: provider.name, providerCover: provider.cover,
-      serviceTitle: data.service.title, serviceId: data.service.id,
-      date: data.date.toISOString(), slot: data.slot,
-      when: `${fmtDateShort(data.date)} · ${data.slot}`,
-      locType: data.locType,
-      isOnline: !!data.isOnline,
-      selectedAddOns: data.selectedAddOns || [],
-      intakeAnswers: data.intakeAnswers || {},
-      clientNotes: data.clientNotes || null,
-      depositAmount: data.depositAmount || 0,
-      total: data.total ?? (data.service.price + (data.locType === 'online' ? 0 : 12)),
-      status: 'pending',
-    };
+    const sessions = data.sessions || [{ date: data.date, slot: data.slot, price: data.service?.price || 0 }];
+    const sessionCount = sessions.length;
+    const serviceFee = data.serviceFeePerSession ?? (data.locType === 'online' ? 0 : 12);
+    // Add-ons charged once across the whole batch — attached to the first booking only
+    const addOnTotal = data.addOnTotal || 0;
+
+    const createdBookings = [];
     try {
-      const created = await insertBooking(newBooking);
-      setBookings(p => [created, ...p]);
-      // Seed system message
-      const sysMsg = await insertMessage({ bookingId: created.id, from:'system', system:true, icon:'calendar', text:`Booking request sent to ${created.providerName}` });
-      setThreads(p => ({ ...p, [created.id]: sysMsg ? [sysMsg] : [] }));
-    } catch (e) { showToast('Booking failed: ' + e.message, 'error'); }
+      for (let i = 0; i < sessions.length; i++) {
+        const ses = sessions[i];
+        const isFirst = i === 0;
+        const sessionTotal = ses.price + serviceFee + (isFirst ? addOnTotal : 0);
+        const newBooking = {
+          userId: user?.id && user.id !== 'admin-shortcut' ? user.id : null,
+          clientName: user?.name || null,
+          clientEmail: user?.email || null,
+          providerId: provider.id,
+          providerName: provider.name, providerCover: provider.cover,
+          serviceTitle: data.service.title + (sessionCount > 1 ? ` (${i+1}/${sessionCount})` : ''),
+          serviceId: data.service.id,
+          date: ses.date.toISOString(),
+          slot: ses.slot,
+          when: `${fmtDateShort(ses.date)} · ${ses.slot}`,
+          locType: data.locType,
+          isOnline: !!data.isOnline,
+          // Add-ons + intake + notes go on the FIRST booking only (avoid duplication)
+          selectedAddOns: isFirst ? (data.selectedAddOns || []) : [],
+          intakeAnswers: isFirst ? (data.intakeAnswers || {}) : {},
+          clientNotes: isFirst ? (data.clientNotes || null) : null,
+          depositAmount: isFirst ? (data.depositAmount || 0) : 0,
+          total: sessionTotal,
+          status: 'pending',
+        };
+        const created = await insertBooking(newBooking);
+        createdBookings.push(created);
+        // Seed system message for each booking
+        try {
+          const sysMsg = await insertMessage({ bookingId: created.id, from:'system', system:true, icon:'calendar', text: sessionCount > 1 ? `Booking request ${i+1} of ${sessionCount} sent to ${created.providerName}` : `Booking request sent to ${created.providerName}` });
+          setThreads(p => ({ ...p, [created.id]: sysMsg ? [sysMsg] : [] }));
+        } catch (e) {}
+      }
+      setBookings(p => [...createdBookings, ...p]);
+      showToast(sessionCount > 1 ? `${sessionCount} booking requests sent!` : 'Booking request sent!', 'success');
+    } catch (e) {
+      showToast('Booking failed: ' + e.message, 'error');
+    }
     setBookingModal(null);
-    showToast('Booking request sent!', 'success');
     goto('bookings');
   };
 
