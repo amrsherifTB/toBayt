@@ -3059,7 +3059,8 @@ const SectionAccordion = ({ title, sub, defaultOpen = false, children }) => {
 };
 
 const AdvancedServiceCard = ({ service, onUpdate, onRemove, userId }) => {
-  const s = service;
+  // Defensive: make sure every field exists so the editor never crashes on legacy data
+  const s = normalizeService(service);
   const [uploadingThumb, setUploadingThumb] = useState(false);
   const handleThumb = async (file) => {
     if (!file || !userId) return;
@@ -3432,10 +3433,10 @@ const NewCollabModal = ({ open, onClose, me, providers, onCreated }) => {
 const ProviderProfileTabs = ({ me, user, onProviderUpdate, onNavigate }) => {
   const [tab, setTab] = useState('services');
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(me.services || []);
+  const [draft, setDraft] = useState((me.services || []).map(normalizeService));
   const [posts, setPosts] = useState([]);
   const [loadingPosts, setLoadingPosts] = useState(false);
-  useEffect(() => { setDraft(me.services || []); }, [me?.id]);
+  useEffect(() => { setDraft((me.services || []).map(normalizeService)); }, [me?.id]);
   useEffect(() => {
     if (tab !== 'posts' || !me?.id) return;
     setLoadingPosts(true);
