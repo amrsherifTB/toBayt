@@ -10,16 +10,22 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; font-family: Inter, system-ui, sans-serif; background: #FAF7F2; }
+  html, body { margin: 0; padding: 0; font-family: Inter, system-ui, sans-serif; background: #FAF7F2; -webkit-tap-highlight-color: transparent; }
+  html, body { overflow-x: hidden; /* prevent horizontal scroll on mobile */ }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #E5E1D8; border-radius: 99px; }
   input, textarea, button, select { font-family: inherit; }
+  /* Mobile-only tweaks */
+  @media (max-width: 640px) {
+    body { font-size: 14px; }
+    nav { padding-left: 12px !important; padding-right: 12px !important; gap: 8px !important; }
+  }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes toastIn { from { opacity: 0; transform: translateY(-8px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
@@ -238,6 +244,7 @@ const mapProvider = (row) => row ? ({
   rating: Number(row.rating ?? 0),
   reviews: row.reviews ?? 0,
   status: row.status || 'pending',
+  commissionPercent: row.commission_percent ?? 12,
   createdAt: row.created_at,
 }) : null;
 
@@ -595,6 +602,7 @@ async function updateProviderRecord(providerId, updates) {
     priceFrom:'price_from', cat:'cat', cover:'cover',
     avatarUrl:'avatar_url', idUrl:'id_url',
     services:'services', status:'status',
+    commissionPercent:'commission_percent',
   };
   for (const [k, col] of Object.entries(map)) if (k in updates) r[col] = updates[k];
   if (updates.status === 'approved') r.verified = true;
@@ -708,8 +716,8 @@ const Modal = ({ open, onClose, children, maxWidth = 560, title }) => {
   }, [open]);
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 pb-8 px-4 overflow-y-auto" style={{ background: 'rgba(26,31,44,0.55)' }} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="w-full relative rounded-2xl shadow-2xl slide-up" style={{ maxWidth, background: T.bgSurface }}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-4 sm:pt-16 pb-4 sm:pb-8 px-2 sm:px-4 overflow-y-auto" style={{ background: 'rgba(26,31,44,0.55)' }} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="w-full relative rounded-xl sm:rounded-2xl shadow-2xl slide-up" style={{ maxWidth, background: T.bgSurface }}>
         {title && (
           <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: T.border }}>
             <h2 className="text-lg font-semibold" style={{ fontFamily:'Fraunces,serif', color: T.ink900 }}>{title}</h2>
@@ -1512,7 +1520,8 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
   });
   const sessionsSubtotal = sessionLines.reduce((s, x) => s + x.price, 0);
   const addOnTotal = (service?.addOns || []).filter(a => selectedAddOns.includes(a.id)).reduce((s, a) => s + Number(a.price || 0), 0);
-  const serviceFee = locType === 'online' ? 0 : 12;
+  // Service fee only applies when the provider has to come to the client's place
+  const serviceFee = locType === 'client_home' ? 12 : 0;
   const totalServiceFee = serviceFee * Math.max(1, selectedSlots.length);
 
   // ----- Package discounts (#13) -----
@@ -1830,7 +1839,7 @@ const BookingModal = ({ provider, initialServiceId, onClose, onComplete, takenSl
                 {(service.addOns || []).filter(a => selectedAddOns.includes(a.id)).map(a => (
                   <div key={a.id} className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>+ {a.name}</span><span style={{ color:T.ink900 }}>QAR {a.price}</span></div>
                 ))}
-                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service fee ({sessionLines.length} × QAR {serviceFee})</span><span style={{ color:T.ink900 }}>{serviceFee === 0 ? <span style={{color:T.success}}>Waived</span> : `QAR ${totalServiceFee}`}</span></div>
+                <div className="flex justify-between text-sm"><span style={{ color:T.ink500 }}>Service fee {serviceFee > 0 ? `(${sessionLines.length} × QAR ${serviceFee} · provider comes to you)` : '(no fee · you go to provider / online)'}</span><span style={{ color:T.ink900 }}>{serviceFee === 0 ? <span style={{color:T.success}}>Waived</span> : `QAR ${totalServiceFee}`}</span></div>
                 {packageDiscount > 0 && matchedPackage && (
                   <div className="flex justify-between text-sm" style={{ color: T.success }}>
                     <span>📦 {matchedPackage.sessions}-session package ({matchedPackage.discountPercent}% off)</span>
@@ -2744,8 +2753,9 @@ const ProviderDashboard = ({ user, providers, bookings, onRefreshPosts, onNaviga
   const isPending = me?.status === 'pending';
   const [postOpen, setPostOpen] = useState(false);
 
-  // Real stats derived from bookings
+  // Real stats derived from bookings — provider's net share = (100 − commission)% of each booking
   const myBookings = bookings.filter(b => b.providerId === user?.providerId);
+  const myShare = (100 - (me?.commissionPercent ?? 12)) / 100;
   const isSameDay = (a, b) => a && b && new Date(a).toDateString() === new Date(b).toDateString();
   const today = new Date();
   const todayBookings = myBookings.filter(b => isSameDay(b.date, today));
@@ -2754,7 +2764,7 @@ const ProviderDashboard = ({ user, providers, bookings, onRefreshPosts, onNaviga
     const d = new Date(b.date);
     return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear() && b.status === 'completed';
   });
-  const monthRevenue = completedThisMonth.reduce((s, b) => s + (Number(b.total) || 0) * 0.88, 0);
+  const monthRevenue = completedThisMonth.reduce((s, b) => s + (Number(b.total) || 0) * myShare, 0);
 
   // Last 7 days for the bar chart
   const last7 = Array.from({ length: 7 }, (_, i) => {
@@ -2762,7 +2772,7 @@ const ProviderDashboard = ({ user, providers, bookings, onRefreshPosts, onNaviga
   });
   const weekData = last7.map(d => ({
     date: d,
-    earnings: myBookings.filter(b => isSameDay(b.date, d) && b.status === 'completed').reduce((s, b) => s + (Number(b.total) || 0) * 0.88, 0),
+    earnings: myBookings.filter(b => isSameDay(b.date, d) && b.status === 'completed').reduce((s, b) => s + (Number(b.total) || 0) * myShare, 0),
   }));
   const weekTotal = weekData.reduce((s, w) => s + w.earnings, 0);
   const maxBar = Math.max(...weekData.map(w => w.earnings), 1);
@@ -2981,11 +2991,14 @@ const WithdrawModal = ({ open, onClose, balance, onWithdraw }) => {
   );
 };
 
-const ProviderWalletPage = ({ user, bookings }) => {
+const ProviderWalletPage = ({ user, bookings, providers }) => {
   const [txns, setTxns] = useState([]);
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const providerId = user?.providerId;
+  const myProvider = providers?.find(p => p.id === providerId);
+  // Use this provider's actual commission rate
+  const myShare = (100 - (myProvider?.commissionPercent ?? 12)) / 100;
 
   const reload = async () => {
     if (!providerId) { setLoading(false); return; }
@@ -2997,7 +3010,7 @@ const ProviderWalletPage = ({ user, bookings }) => {
 
   // Compute balance: completed booking earnings (88% net) minus withdrawals
   const completedBookings = bookings.filter(b => b.providerId === providerId && b.status === 'completed');
-  const totalEarned = completedBookings.reduce((s, b) => s + (Number(b.total) || 0) * 0.88, 0);
+  const totalEarned = completedBookings.reduce((s, b) => s + (Number(b.total) || 0) * myShare, 0);
   const totalWithdrawn = txns.filter(t => t.kind === 'withdrawal').reduce((s, t) => s + Number(t.amount), 0);
   const balance = Math.max(0, totalEarned - totalWithdrawn);
 
@@ -3006,8 +3019,8 @@ const ProviderWalletPage = ({ user, bookings }) => {
   const thisMonth = completedBookings.filter(b => {
     const d = new Date(b.date);
     return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
-  }).reduce((s, b) => s + (Number(b.total) || 0) * 0.88, 0);
-  const pending = bookings.filter(b => b.providerId === providerId && ['approved','confirmed'].includes(b.status)).reduce((s, b) => s + (Number(b.total) || 0) * 0.88, 0);
+  }).reduce((s, b) => s + (Number(b.total) || 0) * myShare, 0);
+  const pending = bookings.filter(b => b.providerId === providerId && ['approved','confirmed'].includes(b.status)).reduce((s, b) => s + (Number(b.total) || 0) * myShare, 0);
 
   const handleWithdraw = async (amt, bankLabel) => {
     await addTransaction(providerId, 'withdrawal', amt, `Withdrawal to ${bankLabel}`);
@@ -3052,7 +3065,7 @@ const ProviderWalletPage = ({ user, bookings }) => {
                     <TrendingUp size={14} style={{ color:T.success }}/>
                   </div>
                   <div className="flex-1"><div className="text-sm font-medium" style={{ color:T.ink900 }}>{b.serviceTitle} · {b.clientName || 'client'}</div><div className="text-xs" style={{ color:T.ink500 }}>{b.when}</div></div>
-                  <div className="font-mono font-semibold" style={{ color:T.success }}>+{Math.round((Number(b.total) || 0) * 0.88)}</div>
+                  <div className="font-mono font-semibold" style={{ color:T.success }}>+{Math.round((Number(b.total) || 0) * myShare)}</div>
                 </div>
               ))}
               {txns.map((t, i) => (
@@ -3858,6 +3871,177 @@ const ProviderProfileTabs = ({ me, user, onProviderUpdate, onNavigate }) => {
 // ============================================================
 // ADMIN PAGE (wired to real pending providers)
 // ============================================================
+// Admin — full provider detail (profile + commission + financials)
+const AdminProviderDetailModal = ({ open, onClose, provider, onProviderUpdate }) => {
+  const [commission, setCommission] = useState(provider?.commissionPercent ?? 12);
+  const [savingCommission, setSavingCommission] = useState(false);
+  const [bookings, setBookings] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!open || !provider) return;
+    setCommission(provider.commissionPercent ?? 12);
+    setLoading(true);
+    Promise.all([
+      sb.from('bookings').select('*').eq('provider_id', provider.id).then(r => (r.data || []).map(mapBooking)),
+      fetchTransactions(provider.id),
+    ]).then(([b, t]) => {
+      setBookings(b);
+      setTransactions(t);
+      setLoading(false);
+    });
+  }, [open, provider?.id]);
+
+  if (!provider) return null;
+
+  const completed = bookings.filter(b => b.status === 'completed');
+  const pendingPayout = bookings.filter(b => ['approved','confirmed'].includes(b.status));
+  const gross = completed.reduce((s, b) => s + Number(b.total || 0), 0);
+  const platformCut = Math.round(gross * commission / 100);
+  const providerNet = gross - platformCut;
+  const totalWithdrawn = transactions.filter(t => t.kind === 'withdrawal').reduce((s, t) => s + Number(t.amount), 0);
+  const balance = Math.max(0, providerNet - totalWithdrawn);
+  const pendingGross = pendingPayout.reduce((s, b) => s + Number(b.total || 0), 0);
+
+  const saveCommission = async () => {
+    setSavingCommission(true);
+    try {
+      const updated = await updateProviderRecord(provider.id, { commissionPercent: Math.max(0, Math.min(100, Number(commission) || 0)) });
+      onProviderUpdate(updated);
+      showToast('Commission updated', 'success');
+    } catch (e) { showToast(e.message, 'error'); }
+    setSavingCommission(false);
+  };
+
+  const setProviderStatus = async (newStatus) => {
+    try {
+      const updated = await updateProviderRecord(provider.id, { status: newStatus });
+      onProviderUpdate(updated);
+      showToast(`Provider ${newStatus}`, 'success');
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={provider.name} maxWidth={680}>
+      <div className="p-4 sm:p-6 flex flex-col gap-5 max-h-[80vh] overflow-y-auto">
+        {/* Header card */}
+        <div className="rounded-xl p-4 flex items-start gap-4" style={{ background: T.bgMuted }}>
+          {provider.avatarUrl ? <img src={provider.avatarUrl} className="w-16 h-16 rounded-full object-cover flex-shrink-0" style={{ border:`1px solid ${T.border}` }}/>
+            : <div className="w-16 h-16 rounded-full flex items-center justify-center text-white text-xl font-semibold flex-shrink-0" style={{ background:`linear-gradient(135deg,${T.primary},${T.accent})`, fontFamily:'Fraunces,serif' }}>{provider.name[0]}</div>}
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold" style={{ color: T.ink900 }}>{provider.name}</div>
+            <div className="text-xs" style={{ color: T.ink500 }}>{provider.specialty} · {provider.city}</div>
+            <div className="text-xs mt-1 truncate" style={{ color: T.ink500 }}>{provider.email || '—'}</div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Pill bg={provider.status === 'approved' ? '#E0F2E7' : provider.status === 'pending' ? T.accent100 : '#FBE2E6'} color={provider.status === 'approved' ? T.success : provider.status === 'pending' ? T.accent600 : '#8B2A38'}>{provider.status}</Pill>
+              {provider.verified && <Pill bg={T.primary100} color={T.primary}>Verified</Pill>}
+              <span className="text-xs" style={{ color: T.ink500 }}>★ {provider.rating || 0} ({provider.reviews} reviews)</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Commission editor */}
+        <div className="rounded-xl p-4" style={{ background: T.primary100, border: `1px solid ${T.primary}22` }}>
+          <div className="text-[10px] uppercase tracking-wider font-medium mb-2" style={{ color: T.primary }}>Platform commission</div>
+          <div className="flex items-center gap-3">
+            <input
+              value={commission}
+              onChange={e => setCommission(e.target.value.replace(/\D/g, ''))}
+              className="w-20 py-2 px-3 rounded-lg text-sm font-mono outline-none text-right"
+              style={{ background: T.bgSurface, border: `1px solid ${T.border}`, color: T.ink900 }}
+            />
+            <span className="text-sm font-semibold" style={{ color: T.ink900 }}>%</span>
+            <div className="flex-1 text-xs" style={{ color: T.ink700 }}>Provider keeps {100 - (commission || 0)}% of every booking.</div>
+            <Btn size="sm" onClick={saveCommission} disabled={savingCommission || Number(commission) === provider.commissionPercent}>{savingCommission ? 'Saving…' : 'Save'}</Btn>
+          </div>
+        </div>
+
+        {/* Financial stats */}
+        <div>
+          <div className="text-[10px] uppercase tracking-wider font-medium mb-2" style={{ color: T.ink500 }}>Financials</div>
+          {loading ? <div className="text-center py-6 text-sm" style={{ color: T.ink500 }}>Loading…</div> : (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { label:'Balance',   value:`QAR ${balance.toLocaleString()}`,     hint:'Available to withdraw',       color: T.success },
+                { label:'Lifetime gross', value:`QAR ${gross.toLocaleString()}`,  hint:`${completed.length} completed sessions`, color: T.ink900 },
+                { label:'Platform cut',   value:`QAR ${platformCut.toLocaleString()}`, hint:`${commission}% commission`, color: T.primary },
+                { label:'Withdrawn',  value:`QAR ${Math.round(totalWithdrawn).toLocaleString()}`, hint:`${transactions.filter(t => t.kind === 'withdrawal').length} withdrawals`, color: T.ink700 },
+                { label:'Pending payout',  value:`QAR ${pendingGross.toLocaleString()}`, hint:`${pendingPayout.length} upcoming session(s)`, color: T.accent600 },
+                { label:'Net to provider', value:`QAR ${providerNet.toLocaleString()}`, hint:`Earned − platform cut`, color: T.success },
+              ].map((s, i) => (
+                <div key={i} className="rounded-xl p-3" style={{ background: T.bgSurface, border: `1px solid ${T.border}` }}>
+                  <div className="text-[10px] uppercase tracking-wider" style={{ color: T.ink500 }}>{s.label}</div>
+                  <div className="text-base font-semibold mt-0.5" style={{ color: s.color }}>{s.value}</div>
+                  <div className="text-[10px] mt-0.5" style={{ color: T.ink500 }}>{s.hint}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Withdrawals */}
+        <div>
+          <div className="text-[10px] uppercase tracking-wider font-medium mb-2" style={{ color: T.ink500 }}>Withdrawals ({transactions.filter(t => t.kind === 'withdrawal').length})</div>
+          <div className="rounded-xl overflow-hidden" style={{ background: T.bgSurface, border: `1px solid ${T.border}` }}>
+            {transactions.filter(t => t.kind === 'withdrawal').length === 0 ? <div className="p-4 text-center text-xs" style={{ color: T.ink500 }}>No withdrawals yet.</div>
+              : transactions.filter(t => t.kind === 'withdrawal').map((t, i, arr) => (
+                <div key={t.id} className="flex items-center justify-between px-4 py-3 text-sm" style={{ borderBottom: i < arr.length - 1 ? `1px solid ${T.border}` : 'none' }}>
+                  <div>
+                    <div style={{ color: T.ink900 }}>{t.description}</div>
+                    <div className="text-xs" style={{ color: T.ink500 }}>{new Date(t.created_at).toLocaleDateString()}</div>
+                  </div>
+                  <div className="font-mono" style={{ color: T.ink900 }}>−QAR {Math.round(Number(t.amount))}</div>
+                </div>
+              ))}
+          </div>
+        </div>
+
+        {/* Bookings */}
+        <div>
+          <div className="text-[10px] uppercase tracking-wider font-medium mb-2" style={{ color: T.ink500 }}>All bookings ({bookings.length})</div>
+          <div className="rounded-xl overflow-hidden max-h-64 overflow-y-auto" style={{ background: T.bgSurface, border: `1px solid ${T.border}` }}>
+            {bookings.length === 0 ? <div className="p-4 text-center text-xs" style={{ color: T.ink500 }}>No bookings yet.</div>
+              : bookings.map((b, i, arr) => (
+                <div key={b.id} className="flex items-center justify-between gap-3 px-4 py-2 text-xs" style={{ borderBottom: i < arr.length - 1 ? `1px solid ${T.border}` : 'none' }}>
+                  <div className="flex-1 min-w-0">
+                    <div className="truncate" style={{ color: T.ink900 }}>{b.serviceTitle}</div>
+                    <div className="truncate" style={{ color: T.ink500 }}>{b.clientName || 'client'} · {b.when}</div>
+                  </div>
+                  <div className="font-mono flex-shrink-0" style={{ color: T.ink900 }}>QAR {b.total}</div>
+                  <StatusBadge status={b.status}/>
+                </div>
+              ))}
+          </div>
+        </div>
+
+        {/* Services */}
+        <div>
+          <div className="text-[10px] uppercase tracking-wider font-medium mb-2" style={{ color: T.ink500 }}>Services ({provider.services?.length || 0})</div>
+          <div className="rounded-xl overflow-hidden" style={{ background: T.bgSurface, border: `1px solid ${T.border}` }}>
+            {(provider.services || []).map((s, i, arr) => (
+              <div key={s.id} className="flex items-center justify-between px-4 py-2 text-xs" style={{ borderBottom: i < arr.length - 1 ? `1px solid ${T.border}` : 'none' }}>
+                <div>
+                  <div style={{ color: T.ink900, fontWeight: 500 }}>{s.title}</div>
+                  <div style={{ color: T.ink500 }}>{s.duration} min</div>
+                </div>
+                <div className="font-mono" style={{ color: T.ink900 }}>QAR {s.price}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Admin actions */}
+        <div className="flex gap-2 flex-wrap pt-2 border-t" style={{ borderColor: T.border }}>
+          {provider.status === 'approved' && <Btn size="sm" variant="outline" onClick={() => setProviderStatus('pending')}>Move back to pending</Btn>}
+          {provider.status === 'pending' && <Btn size="sm" onClick={() => setProviderStatus('approved')}>Approve</Btn>}
+          <Btn size="sm" variant="outline" onClick={onClose}>Close</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
 // #27 — Admin document viewer (ID, CR, avatar)
 const DocumentViewerModal = ({ open, onClose, provider }) => {
   if (!provider) return null;
@@ -3908,19 +4092,22 @@ const DocumentViewerModal = ({ open, onClose, provider }) => {
 const AdminPage = () => {
   const [tab, setTab] = useState('applications');
   const [applications, setApplications] = useState([]);
+  const [allProviders, setAllProviders] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [docViewer, setDocViewer] = useState(null);
+  const [detailProvider, setDetailProvider] = useState(null);
 
   const loadData = async () => {
     setLoading(true);
     try {
       const pending = await fetchPendingProvidersFromSupabase();
       setApplications(pending);
-      // We no longer keep a user list on the backend — users live in Supabase Auth.
-      // Show approved providers in the "Users" tab instead (it's the closest equivalent).
-      const approved = await fetchApprovedProvidersFromSupabase();
-      setUsers(approved.map(p => ({ id: p.userId, email: p.email, name: p.name, role: 'provider' })));
+      // Fetch all providers (any status) for the "Providers" tab so admin can review them after approval too
+      const { data } = await sb.from('providers').select('*').order('created_at', { ascending: false });
+      const all = (data || []).map(mapProvider);
+      setAllProviders(all);
+      setUsers(all.map(p => ({ id: p.userId || p.id, email: p.email, name: p.name, role: 'provider', status: p.status, providerData: p })));
     } catch (e) { console.warn('Admin load failed:', e); }
     setLoading(false);
   };
@@ -3937,6 +4124,7 @@ const AdminPage = () => {
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
       <DocumentViewerModal open={!!docViewer} onClose={() => setDocViewer(null)} provider={docViewer?.provider}/>
+      <AdminProviderDetailModal open={!!detailProvider} onClose={() => setDetailProvider(null)} provider={detailProvider} onProviderUpdate={(updated) => { setDetailProvider(updated); loadData(); }}/>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-semibold" style={{ fontFamily:'Fraunces,serif', color:T.ink900 }}>Admin</h1>
         <Btn variant="outline" size="sm" onClick={loadData} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</Btn>
@@ -3992,16 +4180,24 @@ const AdminPage = () => {
       )}
       {!loading && tab === 'users' && (
         <div className="rounded-2xl overflow-hidden" style={{ background:T.bgSurface, border:`1px solid ${T.border}` }}>
-          {users.length === 0 ? <div className="p-8 text-center text-sm" style={{ color:T.ink500 }}>No registered users yet.</div>
+          {users.length === 0 ? <div className="p-8 text-center text-sm" style={{ color:T.ink500 }}>No providers yet.</div>
             : users.map((u, i, arr) => (
-              <div key={u.id} className="flex items-center gap-3 p-4" style={{ borderBottom: i<arr.length-1 ? `1px solid ${T.border}` : 'none' }}>
-                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold" style={{ background:T.primary, fontFamily:'Fraunces,serif' }}>{u.name[0]}</div>
-                <div className="flex-1">
-                  <div className="text-sm font-semibold" style={{ color:T.ink900 }}>{u.name}</div>
-                  <div className="text-xs" style={{ color:T.ink500 }}>{u.email}</div>
+              <button key={u.id} onClick={() => setDetailProvider(u.providerData)} className="w-full flex items-center gap-3 p-4 text-left hover:bg-gray-50" style={{ borderBottom: i<arr.length-1 ? `1px solid ${T.border}` : 'none' }}>
+                {u.providerData?.avatarUrl ? <img src={u.providerData.avatarUrl} className="w-10 h-10 rounded-full object-cover flex-shrink-0" style={{ border:`1px solid ${T.border}` }}/>
+                  : <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold flex-shrink-0" style={{ background:T.primary, fontFamily:'Fraunces,serif' }}>{u.name[0]}</div>}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-semibold" style={{ color:T.ink900 }}>{u.name}</span>
+                    <Pill bg={u.status === 'approved' ? '#E0F2E7' : u.status === 'pending' ? T.accent100 : '#FBE2E6'} color={u.status === 'approved' ? T.success : u.status === 'pending' ? T.accent600 : '#8B2A38'}>{u.status}</Pill>
+                  </div>
+                  <div className="text-xs truncate" style={{ color:T.ink500 }}>{u.providerData?.specialty || u.email}</div>
                 </div>
-                <Pill bg={u.role==='provider' ? T.accent100 : T.primary100} color={u.role==='provider' ? T.accent600 : T.primary}>{u.role}</Pill>
-              </div>
+                <div className="text-xs text-right hidden sm:block">
+                  <div style={{ color:T.ink500 }}>Commission</div>
+                  <div className="font-mono font-semibold" style={{ color:T.ink900 }}>{u.providerData?.commissionPercent ?? 12}%</div>
+                </div>
+                <ChevronRight size={14} style={{ color: T.ink300 }}/>
+              </button>
             ))}
         </div>
       )}
@@ -4066,15 +4262,19 @@ const AdminBookingsTab = () => {
 // #29 — Admin earnings dashboard (platform fees)
 const AdminEarningsTab = () => {
   const [bookings, setBookings] = useState([]);
+  const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     setLoading(true);
-    sb.from('bookings').select('*').eq('status', 'completed').then(({ data }) => {
-      setBookings((data || []).map(mapBooking)); setLoading(false);
-    });
+    Promise.all([
+      sb.from('bookings').select('*').eq('status', 'completed').then(({ data }) => (data || []).map(mapBooking)),
+      sb.from('providers').select('*').then(({ data }) => (data || []).map(mapProvider)),
+    ]).then(([b, p]) => { setBookings(b); setProviders(p); setLoading(false); });
   }, []);
-  const platformCut = bookings.reduce((s, b) => s + (Number(b.total) || 0) * 0.12, 0); // 12% fee
-  const providerPaid = bookings.reduce((s, b) => s + (Number(b.total) || 0) * 0.88, 0);
+  // Compute per-booking platform cut using each provider's actual commission rate
+  const commissionFor = (providerId) => providers.find(p => p.id === providerId)?.commissionPercent ?? 12;
+  const platformCut = bookings.reduce((s, b) => s + (Number(b.total) || 0) * commissionFor(b.providerId) / 100, 0);
+  const providerPaid = bookings.reduce((s, b) => s + (Number(b.total) || 0) * (100 - commissionFor(b.providerId)) / 100, 0);
   const gross = platformCut + providerPaid;
   const today = new Date();
   // Last 6 months breakdown
@@ -4087,7 +4287,7 @@ const AdminEarningsTab = () => {
       const d = new Date(b.date);
       return d.getMonth() === m.getMonth() && d.getFullYear() === m.getFullYear();
     });
-    return { date: m, fee: inMonth.reduce((s, b) => s + (Number(b.total) || 0) * 0.12, 0) };
+    return { date: m, fee: inMonth.reduce((s, b) => s + (Number(b.total) || 0) * commissionFor(b.providerId) / 100, 0) };
   });
   const maxMonth = Math.max(...monthData.map(m => m.fee), 1);
   return (
@@ -5171,7 +5371,7 @@ function App() {
   else if (effectiveRole === 'provider') {
     if (routeName === 'prov-book') page = <ProviderBookingsPage bookings={bookings.filter(b => b.providerId === user?.providerId)} onAccept={handleAcceptBooking} onDecline={handleDeclineBooking} onComplete={handleCompleteBooking} onReschedule={b => setRescheduleModal(b)} onNavigate={goto}/>;
     else if (routeName === 'messages') page = <MessagesPage bookings={bookings} threads={threads} onSend={handleSend} onMarkRead={handleMarkRead} initialBookingId={currentRoute.bookingId} me="provider"/>;
-    else if (routeName === 'prov-wallet') page = <ProviderWalletPage user={user} bookings={bookings}/>;
+    else if (routeName === 'prov-wallet') page = <ProviderWalletPage user={user} bookings={bookings} providers={providers}/>;
     else if (routeName === 'prov-profile') page = <ProviderProfilePage user={user} providers={providers} onProviderUpdate={handleProviderUpdate} onNavigate={goto}/>;
     else if (routeName === 'profile') page = <ProfilePage user={user} onNavigate={goto} onLogout={handleLogout} onSwitchRole={handleSwitchRole} providers={providers} favorites={favorites} follows={follows} onFavoritesChange={async () => setFavorites(await fetchFavorites(user.id))} onFollowsChange={async () => setFollows(await fetchFollows(user.id))} onUserChange={(u) => setUser(u)}/>;
     else page = <ProviderDashboard user={user} providers={providers} bookings={bookings} onRefreshPosts={refreshData} onNavigate={goto}/>;
